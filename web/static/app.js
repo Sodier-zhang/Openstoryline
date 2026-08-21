@@ -3168,8 +3168,12 @@ class App {
     try { __osHydratePersistedFields(panel.box || document); } catch {}
     try { __osBindPersistedFields(panel.box || document); } catch {}
 
+    const defaultProvider = String(schema?.default_provider || "").trim();
+
     if (before) {
       panel.select.value = before;
+    } else if (defaultProvider && providers.some((v) => String(v?.provider || "").trim() === defaultProvider)) {
+      panel.select.value = defaultProvider;
     } else if (!panel.showDefaultOption && providers.length > 0) {
       const firstProvider = String(providers[0]?.provider || "").trim();
       panel.select.value = firstProvider;

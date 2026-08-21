@@ -2445,6 +2445,7 @@ def _build_provider_ui_schema_from_config(config_path: str, section_name: str) -
     """
     cfg = _read_config_toml(config_path)
     tts = cfg.get(section_name, {})
+    default_provider = _s(tts.get("default_provider")).lower()
 
     providers_out: list[dict] = []
 
@@ -2482,7 +2483,7 @@ def _build_provider_ui_schema_from_config(config_path: str, section_name: str) -
                 "fields": normalized_fields,
             })
 
-    return {"providers": providers_out}
+    return {"default_provider": default_provider, "providers": providers_out}
 
 @app.get("/")
 async def index():

@@ -158,6 +158,7 @@ class GenerateVoiceoverConfig(ConfigBaseModel):
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class GenerateAITransitionConfig(ConfigBaseModel):
+    default_provider: str = "dashscope"
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class SelectBGMConfig(ConfigBaseModel):

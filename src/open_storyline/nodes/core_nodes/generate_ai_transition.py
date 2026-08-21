@@ -217,7 +217,8 @@ class GenerateAITransitionNode(BaseNode):
         return cfg
 
     def _resolve_ai_transition_runtime_cfg(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        provider = str(inputs.get("provider") or "").strip().lower() or "minimax"
+        default_provider = getattr(self.server_cfg.generate_ai_transition, "default_provider", "dashscope")
+        provider = str(inputs.get("provider") or "").strip().lower() or str(default_provider).strip().lower() or "dashscope"
         config_cfg = self._get_provider_cfg(provider)
 
         required_keys = list(config_cfg.keys())

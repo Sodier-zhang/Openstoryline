@@ -1,3 +1,4 @@
+## uvicorn agent_fastapi:app --host 127.0.0.1 --port 8005
 fastapi==0.128.0
 uvicorn[standard]==0.40.0
 langchain-core==1.2.7
@@ -22,3 +23,4 @@ openai==2.16.0
 emoji==2.15.0
 funasr==1.3.1
 torchaudio==2.11.0
+langgraph-prebuilt==1.0.8

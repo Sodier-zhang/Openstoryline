@@ -11,17 +11,17 @@ outputs_dir = "./outputs"
 
 # ============= 模型配置 for user / Model Config for User =============
 [llm]
-model = ""
-base_url = ""
-api_key = "" 
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com/v1"
+api_key = "sk-5e39ee9552fa446e9b03db2bf44d3e01" 
 timeout = 30.0 # 单位：秒
 temperature = 0.1
 max_retries = 2
 
 [vlm]
-model = ""
-base_url = ""
-api_key = "" 
+model = "qwen3-vl-plus"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key = "sk-ws-H.EPRLIHL.tYfB.MEUCIHIZAeICyR_VLMhuYkYF1ogZ0MKgM8DH6mb0rCpkyYv5AiEA_Ia9h6XTzzz11Fcb6CibsBoAaozMmMa6WGSBK50eynA" 
 timeout = 20.0 # 单位：秒
 temperature = 0.1
 max_retries = 2
@@ -90,9 +90,9 @@ base_url = ""
 api_key = ""
 
 [generate_voiceover.providers.bytedance]
-uid = ""
-appid = ""
-access_token = ""
+uid = "84630149"
+appid = "3652955498"
+access_token = "8tezPFZc-qWLxuCbhig9SP6BmIo_gnfc"
 
 [generate_voiceover.providers.minimax]
 base_url = ""
@@ -101,10 +101,11 @@ api_key = ""
 
 # ============= AI 转场生成 / AI transition generation ===================
 [generate_ai_transition]
+default_provider = "dashscope"
 
 [generate_ai_transition.providers.dashscope] # 阿里通义万相 / Alibaba’s Tongyi Wanxiang (Wan) video model
-model_name = ""
-api_key = ""
+model_name = "wan2.2-kf2v-flash"
+api_key = "sk-ws-H.EPRLIHL.tYfB.MEUCIHIZAeICyR_VLMhuYkYF1ogZ0MKgM8DH6mb0rCpkyYv5AiEA_Ia9h6XTzzz11Fcb6CibsBoAaozMmMa6WGSBK50eynA"
 
 [generate_ai_transition.providers.minimax] # Minimax 海螺 / Hailuo
 model_name = ""
