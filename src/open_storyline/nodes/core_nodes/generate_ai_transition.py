@@ -230,11 +230,29 @@ class GenerateAITransitionNode(BaseNode):
         elif self._is_complete_provider_cfg(config_cfg, required_keys):
             final_cfg = config_cfg
         else:
-            missing = [k for k in required_keys if config_cfg.get(k) in (None, "")]
-            raise ValueError(
-                f"provider={provider} missing required fields: {missing}. "
-                f"Please configure in sidebar or config.toml."
-            )
+            fallback_provider = str(default_provider or "").strip().lower() or "dashscope"
+            if fallback_provider and fallback_provider != provider:
+                fallback_cfg = self._get_provider_cfg(fallback_provider)
+                fallback_required_keys = list(fallback_cfg.keys())
+                fallback_frontend_cfg = {k: inputs.get(k) for k in fallback_required_keys}
+                if self._is_complete_provider_cfg(fallback_frontend_cfg, fallback_required_keys):
+                    provider = fallback_provider
+                    final_cfg = fallback_frontend_cfg
+                elif self._is_complete_provider_cfg(fallback_cfg, fallback_required_keys):
+                    provider = fallback_provider
+                    final_cfg = fallback_cfg
+                else:
+                    missing = [k for k in fallback_required_keys if fallback_cfg.get(k) in (None, "")]
+                    raise ValueError(
+                        f"provider={fallback_provider} missing required fields: {missing}. "
+                        f"Please configure in sidebar or config.toml."
+                    )
+            else:
+                missing = [k for k in required_keys if config_cfg.get(k) in (None, "")]
+                raise ValueError(
+                    f"provider={provider} missing required fields: {missing}. "
+                    f"Please configure in sidebar or config.toml."
+                )
 
         return {"provider": provider, **final_cfg}
 

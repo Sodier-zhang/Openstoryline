@@ -414,6 +414,8 @@ class ToolInterceptor:
             ctx = getattr(runtime, "context", None) if runtime else None
             provider_cfg_all = getattr(ctx, context_attr, None) if ctx else None
             if not isinstance(provider_cfg_all, dict):
+                if default_provider:
+                    args.setdefault("provider", default_provider)
                 return await handler(request)
 
             provider = str(provider_cfg_all.get("provider") or "").strip().lower()
@@ -422,9 +424,18 @@ class ToolInterceptor:
                     args.setdefault("provider", default_provider)
                 return await handler(request)
 
+            provider_cfg = provider_cfg_all.get(provider)
+            if (
+                default_provider
+                and provider == "minimax"
+                and isinstance(provider_cfg, dict)
+                and not str(provider_cfg.get("api_key") or "").strip()
+            ):
+                args["provider"] = default_provider
+                return await handler(request)
+
             args.setdefault("provider", provider)
 
-            provider_cfg = provider_cfg_all.get(provider)
             if isinstance(provider_cfg, dict):
                 for key, value in provider_cfg.items():
                     if value is None:
@@ -446,7 +457,7 @@ class ToolInterceptor:
             handler,
             tool_name_keyword="voiceover",
             context_attr="tts_config",
-            default_provider="minimax",
+            default_provider="doubao_tts_2",
         )
 
     @staticmethod
@@ -461,6 +472,7 @@ class ToolInterceptor:
             handler,
             tool_name_keyword="generate_ai_transition",
             context_attr="ai_transition_config",
+            default_provider="dashscope",
         )
     
     @staticmethod

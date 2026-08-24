@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 import anyio
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -57,6 +58,7 @@ from open_storyline.config import Settings
 from open_storyline.storage.agent_memory import ArtifactStore
 from open_storyline.mcp.hooks.node_interceptors import ToolInterceptor
 from open_storyline.mcp.hooks.chat_middleware import set_mcp_log_sink, reset_mcp_log_sink
+from open_storyline.api.auto_edit_routes import register_auto_edit_routes
 
 WEB_DIR = os.path.join(ROOT_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
@@ -309,6 +311,8 @@ def detect_media_kind(filename: str) -> str:
         return "image"
     if ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
         return "video"
+    if ext in {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}:
+        return "audio"
     return "unknown"
 
 
@@ -1333,6 +1337,15 @@ class ChatSession:
         self.restore_degraded: bool = False
         self.restore_degraded_reason: str = ""
 
+        # REST auto-edit task state. These fields are persisted with the session so
+        # polling and result downloads keep working after the session is restored.
+        self.auto_edit_status: str = "idle"
+        self.auto_edit_result_path: str = ""
+        self.auto_edit_public_video_url: str = ""
+        self.auto_edit_result_media_id: str = ""
+        self.auto_edit_upload_error: str = ""
+        self.auto_edit_error: str = ""
+
     @classmethod
     def state_file_path_for(cls, session_id: str, cfg: Settings) -> str:
         return os.path.abspath(os.path.join(str(cfg.project.outputs_dir), session_id, SESSION_STATE_FILENAME))
@@ -1362,11 +1375,16 @@ class ChatSession:
             if not isinstance(v, dict):
                 continue
             try:
+                name = str(v.get("name") or "")
+                path = str(v.get("path") or "")
+                kind = str(v.get("kind") or "unknown")
+                if kind == "unknown":
+                    kind = detect_media_kind(name or path)
                 meta = MediaMeta(
                     id=str(v.get("id") or ""),
-                    name=str(v.get("name") or ""),
-                    kind=str(v.get("kind") or "unknown"),
-                    path=str(v.get("path") or ""),
+                    name=name,
+                    kind=kind,
+                    path=path,
                     thumb_path=(str(v.get("thumb_path")) if v.get("thumb_path") else None),
                     ts=float(v.get("ts") or time.time()),
                 )
@@ -1570,6 +1588,14 @@ class ChatSession:
             "custom_llm_config": self._sanitize_custom_model_cfg_for_state(self.custom_llm_config),
             "custom_vlm_config": self._sanitize_custom_model_cfg_for_state(self.custom_vlm_config),
             "tts_config": self._sanitize_tts_cfg_for_state(self.tts_config),
+            "auto_edit": {
+                "status": self.auto_edit_status,
+                "result_path": self.auto_edit_result_path,
+                "public_video_url": self.auto_edit_public_video_url,
+                "result_media_id": self.auto_edit_result_media_id,
+                "upload_error": self.auto_edit_upload_error,
+                "error": self.auto_edit_error,
+            },
         }
 
     def save_state_atomic(self) -> None:
@@ -1723,6 +1749,24 @@ class ChatSession:
 
         pending_ids = [str(x) for x in (data.get("pending_media_ids") or [])]
         sess.pending_media_ids = [x for x in pending_ids if x in sess.load_media]
+
+        auto_edit = data.get("auto_edit") or {}
+        if isinstance(auto_edit, dict):
+            restored_status = str(auto_edit.get("status") or "idle")
+            if restored_status in {"idle", "processing", "completed", "failed"}:
+                sess.auto_edit_status = restored_status
+            sess.auto_edit_result_path = str(auto_edit.get("result_path") or "")
+            sess.auto_edit_public_video_url = str(auto_edit.get("public_video_url") or "")
+            sess.auto_edit_result_media_id = str(auto_edit.get("result_media_id") or "")
+            sess.auto_edit_upload_error = str(auto_edit.get("upload_error") or "")
+            sess.auto_edit_error = str(auto_edit.get("error") or "")
+            if sess.auto_edit_status == "processing":
+                sess.auto_edit_status = "failed"
+                sess.auto_edit_result_path = ""
+                sess.auto_edit_public_video_url = ""
+                sess.auto_edit_result_media_id = ""
+                sess.auto_edit_upload_error = ""
+                sess.auto_edit_error = "auto edit task was interrupted by server restart"
 
         lc_msgs_raw = data.get("lc_messages_serialized") or []
         lc_msgs: List[BaseMessage] = []
@@ -2006,10 +2050,13 @@ class ChatSession:
 
     # ---- DTO / public mapping ----
     def public_media(self, meta: MediaMeta) -> Dict[str, Any]:
+        kind = meta.kind
+        if kind == "unknown":
+            kind = detect_media_kind(meta.name or meta.path)
         return {
             "id": meta.id,
             "name": meta.name,
-            "kind": meta.kind,
+            "kind": kind,
             "thumb_url": f"/api/sessions/{self.session_id}/media/{meta.id}/thumb",
             "file_url": f"/api/sessions/{self.session_id}/media/{meta.id}/file",
         }
@@ -2360,6 +2407,7 @@ _PROVIDER_UI_META_KEYS = {
 _PROVIDER_UI_LABEL_OVERRIDES = {
     "302": "302.AI",
     "bytedance": "字节跳动 ByteDance",
+    "doubao_tts_2": "Doubao-TTS 2.0",
     "dashscope": "阿里万相 Wan",
 }
 
@@ -2514,13 +2562,6 @@ async def get_ai_transition_ui_schema():
 # -------------------------
 # Sessions (REST)
 # -------------------------
-@api.post("/sessions")
-async def create_session():
-    store: SessionStore = app.state.sessions
-    sess = await store.create()
-    return JSONResponse(sess.snapshot())
-
-
 @api.get("/sessions/{session_id}")
 async def get_session(session_id: str):
     store: SessionStore = app.state.sessions
@@ -2563,16 +2604,24 @@ async def cancel_session_turn(session_id: str):
 # -------------------------
 # media (REST, session-scoped)
 # -------------------------
-@api.post("/sessions/{session_id}/media")
-async def upload_media(session_id: str, request: Request, files: List[UploadFile] = File(...)):
-    if not isinstance(files, list) or not files:
+async def upload_media_service(
+    session_id: str,
+    request: Request,
+    files: Optional[List[UploadFile]],
+    file: Optional[UploadFile],
+):
+    uploads = list(files or [])
+    if file is not None:
+        uploads.append(file)
+
+    if not uploads:
         raise HTTPException(status_code=400, detail="no files")
 
-    if MAX_UPLOAD_FILES_PER_REQUEST > 0 and len(files) > MAX_UPLOAD_FILES_PER_REQUEST:
+    if MAX_UPLOAD_FILES_PER_REQUEST > 0 and len(uploads) > MAX_UPLOAD_FILES_PER_REQUEST:
         raise HTTPException(status_code=400, detail=f"单次上传最多 {MAX_UPLOAD_FILES_PER_REQUEST} 个文件")
 
     # 按素材个数限流（cost = 文件数）
-    rej = await _enforce_upload_media_count_limit(request, cost=float(len(files)))
+    rej = await _enforce_upload_media_count_limit(request, cost=float(len(uploads)))
     if rej:
         return rej
 
@@ -2580,7 +2629,7 @@ async def upload_media(session_id: str, request: Request, files: List[UploadFile
         raise HTTPException(status_code=429, detail="上传并发过高，请稍后重试")
     await UPLOAD_SEM.acquire()
 
-    n = len(files)
+    n = len(uploads)
     try:
         store: SessionStore = app.state.sessions
         sess = await store.get_or_404(session_id)
@@ -2591,11 +2640,11 @@ async def upload_media(session_id: str, request: Request, files: List[UploadFile
             sess._check_media_caps_locked(add=n)
             sess._direct_upload_reservations += n
 
-            display_names = [sanitize_filename(uf.filename or "unnamed") for uf in files]
+            display_names = [sanitize_filename(uf.filename or "unnamed") for uf in uploads]
             store_filenames = sess._reserve_store_filenames_locked(display_names)
 
         try:
-            metas = await sess.add_uploads(files, store_filenames=store_filenames)
+            metas = await sess.add_uploads(uploads, store_filenames=store_filenames)
 
         finally:
             async with sess.media_lock:
@@ -2603,10 +2652,13 @@ async def upload_media(session_id: str, request: Request, files: List[UploadFile
 
         await store.save_session_state(sess)
 
-        return JSONResponse({
+        response_data: Dict[str, Any] = {
             "media": [sess.public_media(m) for m in metas],
             "pending_media": sess.public_pending_media(),
-        })
+        }
+        if len(metas) == 1:
+            response_data["media_id"] = metas[0].id
+        return JSONResponse(response_data)
     finally:
         try:
             UPLOAD_SEM.release()
@@ -2930,6 +2982,35 @@ async def preview_local_file(session_id: str, path: str):
     )
 
 app.include_router(api)
+register_auto_edit_routes(app, upload_media_service=upload_media_service)
+
+AUTO_EDIT_OPENAPI_PATHS = {
+    "/api/sessions",
+    "/api/sessions/{session_id}/media",
+    "/api/sessions/{session_id}/edit",
+    "/api/sessions/{session_id}/result",
+}
+
+
+def auto_edit_openapi() -> Dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    documented_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", "") in AUTO_EDIT_OPENAPI_PATHS
+    ]
+    app.openapi_schema = get_openapi(
+        title="FireRed OpenStoryline Auto Edit API",
+        version="1.0.0",
+        description="创建剪辑会话、上传素材、提交自动剪辑任务并获取剪辑结果。",
+        routes=documented_routes,
+    )
+    return app.openapi_schema
+
+
+app.openapi = auto_edit_openapi
 
 
 # -------------------------

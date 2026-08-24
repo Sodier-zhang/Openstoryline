@@ -158,8 +158,9 @@ paths:
       description: |
         查询当前会话的自动剪辑任务状态。
 
-        当状态为 `completed` 时，返回最终视频访问地址 `video_url`。
-        客户端可继续请求该地址下载或播放剪辑完成的视频。
+        当状态为 `completed` 时，会先将成片上传到公网文件服务 `uploadTemp`。
+        `url` 和 `video_url` 均为 `uploadTemp` 响应中的 `result.url`。
+        如果公网文件服务未配置或上传失败，`url` / `video_url` 为空，并通过 `upload_error` 返回上传失败原因。
       operationId: getAutoEditResult
       parameters:
         - $ref: "#/components/parameters/SessionId"
@@ -179,7 +180,10 @@ paths:
                   summary: 任务完成
                   value:
                     status: completed
-                    video_url: /api/sessions/abc123/result.mp4
+                    media_id: 1901432010450808833
+                    url: https://cdn.example.com/openstoryline/output.mp4
+                    video_url: https://cdn.example.com/openstoryline/output.mp4
+                    local_video_url: http://127.0.0.1:7861/api/sessions/abc123/result.mp4
                 failed:
                   summary: 任务失败
                   value:
@@ -266,11 +270,31 @@ components:
       properties:
         status:
           $ref: "#/components/schemas/EditStatus"
+        media_id:
+          type: string
+          nullable: true
+          description: 最终输出视频的素材 ID。公网文件服务上传成功时为文件服务返回的 `result.id`，否则为本地生成的结果 ID。
+          example: 1901432010450808833
+        url:
+          type: string
+          nullable: true
+          description: 最终视频访问地址，取自公网文件服务 `uploadTemp` 返回的 `result.url`。
+          example: https://cdn.example.com/openstoryline/output.mp4
         video_url:
           type: string
           nullable: true
-          description: 最终视频访问地址，仅当 `status=completed` 时返回。
-          example: /api/sessions/abc123/result.mp4
+          description: 最终视频访问地址，和 `url` 相同；保留该字段用于兼容已有调用方。
+          example: https://cdn.example.com/openstoryline/output.mp4
+        local_video_url:
+          type: string
+          nullable: true
+          description: 本服务提供的本地成片下载地址，仅当 `status=completed` 时返回。
+          example: http://127.0.0.1:7861/api/sessions/abc123/result.mp4
+        upload_error:
+          type: string
+          nullable: true
+          description: 公网上传失败原因；上传成功时为空。
+          example: ConnectionError: failed to connect to uploadTemp
         error:
           type: string
           nullable: true

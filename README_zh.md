@@ -266,6 +266,14 @@ sh build_env.sh
   uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860
   ```
 
+- 方式 3：后台启动/关闭完整服务（MCP + Web）
+
+  ```bash
+  ./run.sh start
+  ./run.sh status
+  ./run.sh stop
+  ```
+
 ## 🐳 Docker 部署
 
 如果未安装 Docker，请先安装 https://www.docker.com/products/docker-desktop/

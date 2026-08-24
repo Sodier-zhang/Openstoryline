@@ -6,6 +6,7 @@ import uuid
 import binascii
 import json
 import librosa
+import wave
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable, Union
 
@@ -36,12 +37,13 @@ class GenerateVoiceoverNode(BaseNode):
 
     # provider -> handler method name
     _PROVIDER_HANDLERS: Dict[str, str] = {
+        "doubao_tts_2": "_tts_doubao_tts_2_sync",
         "bytedance": "_tts_bytedance_sync",
         "minimax": "_tts_minimax_sync",
         "302": "_tts_302_sync",
     }
 
-    _DEFAULT_PROVIDER = "minimax"
+    _DEFAULT_PROVIDER = "doubao_tts_2"
 
     MILLISECONDS_PER_SECOND = 1000.0
     _SAFE_MARGIN = 10
@@ -59,9 +61,10 @@ class GenerateVoiceoverNode(BaseNode):
 
         # 2) Provider selection
         provider_name = (inputs.get("provider") or "").strip()
+        default_provider = self._configured_default_provider()
         if not provider_name:
             node_state.node_summary.info_for_user("未找到可生成配音的tts提供商，使用默认")
-            provider_name = self._DEFAULT_PROVIDER
+            provider_name = default_provider
 
         handler = self._get_provider_handler(provider_name)
         node_state.node_summary.info_for_user(f"TTS 服务：{provider_name}")
@@ -75,18 +78,19 @@ class GenerateVoiceoverNode(BaseNode):
         output_dir = self.server_cache_dir / str(session_id) / str(artifact_id)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 4) Deduce which key fields this provider needs from config, and get values from inputs
-        #    If user/config keys are incomplete, fallback to 302 and use 302 key from environment variables
+        # 4) Deduce which key fields this provider needs from config, and get values from inputs.
+        #    If a requested provider is incomplete, fall back to the configured default provider.
         try:
             provider_cfg = self._get_provider_cfg(provider_name)
             secrets = self._resolve_provider_secrets(provider_name, provider_cfg, inputs, node_state)
         except ValueError as e:
-            if provider_name == self._DEFAULT_PROVIDER:
+            fallback_provider = self._fallback_provider_for(provider_name, default_provider)
+            if not fallback_provider:
                 raise
             node_state.node_summary.info_for_user(
-                f"Key/config for provider={provider_name} is incomplete, automatically falling back to {self._DEFAULT_PROVIDER} (using environment variable key): {e}"
+                f"Key/config for provider={provider_name} is incomplete, automatically falling back to {fallback_provider}: {e}"
             )
-            provider_name = self._DEFAULT_PROVIDER
+            provider_name = fallback_provider
             handler = self._get_provider_handler(provider_name)
             provider_cfg = self._get_provider_cfg(provider_name)
             secrets = self._resolve_provider_secrets(provider_name, provider_cfg, inputs, node_state)
@@ -155,6 +159,22 @@ class GenerateVoiceoverNode(BaseNode):
     # Provider dispatch / config helpers
     # ---------------------------------------------------------------------
 
+    def _configured_default_provider(self) -> str:
+        provider = str(getattr(self.server_cfg.generate_voiceover, "default_provider", "") or "").strip().lower()
+        return provider or self._DEFAULT_PROVIDER
+
+    def _fallback_provider_for(self, requested_provider: str, configured_default: str) -> str:
+        requested = str(requested_provider or "").strip().lower()
+        candidates = [
+            str(configured_default or "").strip().lower(),
+            self._DEFAULT_PROVIDER,
+            "doubao_tts_2",
+        ]
+        for candidate in candidates:
+            if candidate and candidate != requested:
+                return candidate
+        return ""
+
     def _get_provider_handler(self, provider_name: str) -> Callable[..., None]:
         if provider_name is None or provider_name == "":
             provider_name = self._DEFAULT_PROVIDER
@@ -198,7 +218,7 @@ class GenerateVoiceoverNode(BaseNode):
             if (value in (None, "")) and key == "base_url":
                 value = self._default_base_url(provider_name)
             
-            if (value in (None, "")) and provider_name == self._DEFAULT_PROVIDER:
+            if (value in (None, "")) and provider_name == "minimax":
                 env_v = self._resolve_minimax_env_secret(key)
                 if env_v not in (None, ""):
                     value = env_v
@@ -456,6 +476,97 @@ class GenerateVoiceoverNode(BaseNode):
     # Provider implementations (each provider has its own dedicated method)
     # ---------------------------------------------------------------------
 
+    def _tts_doubao_tts_2_sync(
+        self,
+        *,
+        text: str,
+        wav_path: Path,
+        secrets: Dict[str, Any],
+        tts_params: Dict[str, Any],
+        provider_cfg: Dict[str, Any],
+    ) -> None:
+        api_url = str(
+            secrets.get("base_url")
+            or "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
+        ).rstrip("/")
+        api_key = str(secrets.get("api_key") or "").strip()
+        resource_id = str(secrets.get("resource_id") or "seed-tts-2.0").strip()
+        request_id = str(uuid.uuid4())
+        sample_rate = int(tts_params.get("sample_rate", 24000))
+        speaker = str(
+            tts_params.get("speaker")
+            or tts_params.get("voice_type")
+            or "zh_female_vv_uranus_bigtts"
+        ).strip()
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Api-Key": api_key,
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": request_id,
+        }
+        body = {
+            "user": {"uid": "open_storyline"},
+            "req_params": {
+                "text": text,
+                "speaker": speaker,
+                "sample_rate": sample_rate,
+                "audio_params": {
+                    "format": "pcm",
+                    "speech_rate": int(tts_params.get("speech_rate", 0)),
+                    "loudness_rate": int(tts_params.get("loudness_rate", 0)),
+                },
+            },
+        }
+
+        resp = requests.post(
+            api_url,
+            headers=headers,
+            json=body,
+            timeout=60,
+            stream=True,
+        )
+        if not resp.ok:
+            try:
+                error_detail: Any = resp.json()
+            except ValueError:
+                error_detail = (resp.text or "").strip()[:1000]
+            raise RuntimeError(
+                f"doubao tts 2.0 HTTP {resp.status_code}: {error_detail or resp.reason}"
+            )
+
+        audio_chunks: list[bytes] = []
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+            line = str(line or "").strip()
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+
+            code = event.get("code", 0)
+            if code not in (0, 20000000):
+                raise RuntimeError(
+                    f"doubao tts 2.0 failed: code={code}, message={event.get('message', '')}"
+                )
+            encoded_audio = event.get("data")
+            if encoded_audio:
+                try:
+                    audio_chunks.append(base64.b64decode(encoded_audio))
+                except (ValueError, binascii.Error) as exc:
+                    raise RuntimeError("doubao tts 2.0 returned invalid audio data") from exc
+
+        if not audio_chunks:
+            raise RuntimeError("doubao tts 2.0 returned no audio data")
+
+        with wave.open(str(wav_path), "wb") as output_audio:
+            output_audio.setnchannels(1)
+            output_audio.setsampwidth(2)
+            output_audio.setframerate(sample_rate)
+            output_audio.writeframes(b"".join(audio_chunks))
+
     def _preview_b64(self, b64: str, keep: int = 80) -> str:
         if not isinstance(b64, str):
             return f"<non-str data type={type(b64).__name__}>"
@@ -511,7 +622,14 @@ class GenerateVoiceoverNode(BaseNode):
         }
 
         resp = requests.post(api_url, headers=headers, json=body, timeout=60)
-        resp.raise_for_status()
+        if not resp.ok:
+            try:
+                error_detail: Any = resp.json()
+            except ValueError:
+                error_detail = (resp.text or "").strip()[:1000]
+            raise RuntimeError(
+                f"bytedance tts HTTP {resp.status_code}: {error_detail or resp.reason}"
+            )
 
         resp_json = resp.json()
         if isinstance(resp_json, dict):

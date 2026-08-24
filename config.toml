@@ -56,7 +56,7 @@ skill_dir = "./.storyline/skills"
 
 # =========== pexels ==========
 [search_media]
-pexels_api_key = ""
+pexels_api_key = "Lc5uDm6PnUzvTCV4P9K6Hr3gwKwe3KkT4Vg2fe9Wm6iHKGdyxmQr3u59"
 
 # ============= 镜头分割 / Shot Segmentation =============
 [split_shots]
@@ -84,6 +84,12 @@ script_template_info_path = "./resource/script_templates/meta.json"
 # ============= 配音生成 / Voiceover Generation ===================
 [generate_voiceover]
 tts_provider_params_path = "./resource/tts/tts_providers.json"
+default_provider = "doubao_tts_2"
+
+[generate_voiceover.providers.doubao_tts_2]
+base_url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
+api_key = "7396a03d-2972-4abf-828d-9fabd45c9ab6"
+resource_id = "seed-tts-2.0"
 
 [generate_voiceover.providers.302]
 base_url = ""
@@ -111,6 +117,14 @@ api_key = "sk-ws-H.EPRLIHL.tYfB.MEUCIHIZAeICyR_VLMhuYkYF1ogZ0MKgM8DH6mb0rCpkyYv5
 model_name = ""
 api_key = ""
 
+# ============= 成片公网上传 / Result Upload ===================
+[result_upload]
+enabled = true
+upload_temp_url = "http://192.168.31.220:8081/marketing/api/file/uploadTemp"
+access_token = ""
+title = "openstoryline-result.mp4"
+description = "OpenStoryline rendered video"
+timeout = 120.0
 
 # ============= BGM选择 / BGM Selection ====================
 # 主要是用于计算音乐特征的一些参数 / Mainly parameters for calculating music features

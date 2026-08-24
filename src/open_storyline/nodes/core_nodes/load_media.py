@@ -14,10 +14,13 @@ from open_storyline.utils.register import NODE_REGISTRY
 
 
 VIDEO_EXTS = {
-    ".mp4", ".mov", ".mkv", ".avi"
+    ".mp4", ".mov", ".mkv", ".avi", ".webm"
 }
 IMAGE_EXTS = {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp"
+}
+AUDIO_EXTS = {
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"
 }
 
 def _image_metadata_from_path(path: Path) -> dict[str, Any]:
@@ -107,6 +110,30 @@ def _video_metadata_from_path(
     }
 
 
+def _audio_metadata_from_path(path: Path) -> dict[str, Any]:
+    container = av.open(str(path))
+    try:
+        audio_stream = next(
+            (s for s in container.streams if s.type == "audio"),
+            None,
+        )
+        if audio_stream is None:
+            raise ValueError(f"No audio stream found: {path}")
+
+        duration_sec = 0.0
+        if container.duration is not None:
+            duration_sec = container.duration / 1_000_000
+        elif audio_stream.duration is not None and audio_stream.time_base is not None:
+            duration_sec = float(audio_stream.duration * audio_stream.time_base)
+
+        return {
+            "duration": int(round(duration_sec * 1000)),
+            "audio_sample_rate_hz": int(audio_stream.rate) if audio_stream.rate else None,
+        }
+    finally:
+        container.close()
+
+
 @NODE_REGISTRY.register()
 class LoadMediaNode(BaseNode):
     meta = NodeMeta(
@@ -137,6 +164,9 @@ class LoadMediaNode(BaseNode):
             elif suffix in IMAGE_EXTS:
                 metadata = _image_metadata_from_path(path)
                 media_type = "image"
+            elif suffix in AUDIO_EXTS:
+                metadata = _audio_metadata_from_path(path)
+                media_type = "audio"
             else:
                 node_state.node_summary.info_for_user(f"[Node {self.meta.node_id}] Skipping unsupported file type `{enc_media['orig_path']}` ")
                 continue
@@ -160,6 +190,6 @@ class LoadMediaNode(BaseNode):
             if isinstance(a, dict)
         )   
 
-        node_state.node_summary.info_for_user(f"[Node {self.meta.node_id}] Media indexing completed successfully: {c.get('video', 0)} video(s), {c.get('image', 0)} image(s)",)
+        node_state.node_summary.info_for_user(f"[Node {self.meta.node_id}] Media indexing completed successfully: {c.get('video', 0)} video(s), {c.get('image', 0)} image(s), {c.get('audio', 0)} audio(s)",)
 
         return {"media": media}

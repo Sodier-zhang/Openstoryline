@@ -276,6 +276,9 @@ class SplitShotsNode(BaseNode):
         clip_index = 1
 
         for media_item in media:
+            if self._is_audio_media(media_item):
+                self._note_audio_skipped(media_item, node_state.node_summary)
+                continue
             clip = self._build_clip_without_splitting(media_item=media_item, clip_index=clip_index, node_summary=node_state.node_summary)
             clips.append(clip)
             clip_index += 1
@@ -321,6 +324,9 @@ class SplitShotsNode(BaseNode):
             )
 
         for media_item in media:
+            if self._is_audio_media(media_item):
+                self._note_audio_skipped(media_item, node_state.node_summary)
+                continue
             new_clips, clip_index = self._process_single_media_item(
                 media_item=media_item,
                 output_directory=output_directory,
@@ -364,6 +370,15 @@ class SplitShotsNode(BaseNode):
         if not media_type:
             raise ValueError(f"media_item missing required field 'media_type': {media_item}")
         return str(media_type)
+
+    def _is_audio_media(self, media_item: Dict[str, Any]) -> bool:
+        return str(media_item.get("media_type") or "").lower() == "audio"
+
+    def _note_audio_skipped(self, media_item: Dict[str, Any], node_summary: NodeSummary) -> None:
+        media_id = str(media_item.get("media_id") or "unknown")
+        node_summary.info_for_user(
+            f"[Node {self.meta.node_id}] Audio media {media_id} indexed, skipped for shot splitting"
+        )
 
     def _require_video_metadata(self, media_id: str, media_item: Dict[str, Any]) -> Dict[str, Any]:
         metadata = media_item.get("metadata") or {}

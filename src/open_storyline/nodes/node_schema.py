@@ -29,12 +29,22 @@ class ImageMetadata(BaseModel):
     height: int = Field(description="Height")
 
 
+class AudioMetadata(BaseModel):
+    """Audio metadata"""
+    duration: float = Field(description="Duration (milliseconds)")
+    audio_sample_rate_hz: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Audio sample rate (Hz), common values: 44100, 48000"
+    )
+
+
 class Media(BaseModel):
     """Single media"""
     media_id: str
     path: str
     media_type: Literal["video", "image", "audio", "unknown"]
-    metadata: Union[VideoMetadata, ImageMetadata]
+    metadata: Union[VideoMetadata, ImageMetadata, AudioMetadata]
     extra_info: Optional[Dict[str, Any]] = None
 
 

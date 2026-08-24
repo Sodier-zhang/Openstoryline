@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Optional, Any
 import logging
+import asyncio
 
 import httpx
 
@@ -42,89 +43,97 @@ async def validate_api_key(base_url: str, api_key: str, model: str, provider: st
         "max_tokens": 1,
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                except Exception:
-                    raise ValueError(f"{provider} returned non-JSON response. Check base_url/gateway.")
-                choices = data.get("choices")
-                if isinstance(choices, list) and len(choices) > 0:
-                    print(f"{model} validation successful")
-                    return True
-                raise ValueError(
-                    f"{provider} returned a non-OpenAI-compatible response for chat.completions. "
-                    f"Please check gateway behavior, base_url routing, or auth configuration."
+    attempts = 3
+    retry_delay_s = 1.0
+
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
                 )
             
-            # Handle specific HTTP status codes
-            if response.status_code in (401, 403):
-                logger.error(f"{provider} API key validation failed: {response.status_code} {response.reason_phrase}")
-                raise ValueError(
-                    f"{provider} API key is invalid or unauthorized. Please check your API key in config.toml or environment variables.\n"
-                    f"Model: {model}\n"
-                    f"Base URL: {base_url}\n"
-                    f"HTTP {response.status_code}: {response.reason_phrase}"
-                )
-            elif response.status_code == 404:
-                logger.error(f"{provider} API endpoint not found: {response.status_code} {response.reason_phrase}")
-                raise ValueError(
-                    f"{provider} API endpoint not found. Please check your base_url or model name.\n"
-                    f"Model: {model}\n"
-                    f"Base URL: {base_url}\n"
-                    f"HTTP {response.status_code}: {response.reason_phrase}"
-                )
-            elif response.status_code == 429:
-                logger.warning(f"{provider} API rate limited: {response.status_code} {response.reason_phrase}")
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except Exception:
+                        raise ValueError(f"{provider} returned non-JSON response. Check base_url/gateway.")
+                    choices = data.get("choices")
+                    if isinstance(choices, list) and len(choices) > 0:
+                        print(f"{model} validation successful")
+                        return True
+                    raise ValueError(
+                        f"{provider} returned a non-OpenAI-compatible response for chat.completions. "
+                        f"Please check gateway behavior, base_url routing, or auth configuration."
+                    )
+            
+                # Handle specific HTTP status codes
+                if response.status_code in (401, 403):
+                    logger.error(f"{provider} API key validation failed: {response.status_code} {response.reason_phrase}")
+                    raise ValueError(
+                        f"{provider} API key is invalid or unauthorized. Please check your API key in config.toml or environment variables.\n"
+                        f"Model: {model}\n"
+                        f"Base URL: {base_url}\n"
+                        f"HTTP {response.status_code}: {response.reason_phrase}"
+                    )
+                elif response.status_code == 404:
+                    logger.error(f"{provider} API endpoint not found: {response.status_code} {response.reason_phrase}")
+                    raise ValueError(
+                        f"{provider} API endpoint not found. Please check your base_url or model name.\n"
+                        f"Model: {model}\n"
+                        f"Base URL: {base_url}\n"
+                        f"HTTP {response.status_code}: {response.reason_phrase}"
+                    )
+                elif response.status_code == 429:
+                    logger.warning(f"{provider} API rate limited: {response.status_code} {response.reason_phrase}")
+                    raise ConnectionError(
+                        f"{provider} API rate limited. Please try again later.\n"
+                        f"Model: {model}\n"
+                        f"Base URL: {base_url}\n"
+                        f"HTTP {response.status_code}: {response.reason_phrase}"
+                    )
+                elif response.status_code >= 500:
+                    logger.error(f"{provider} API server error: {response.status_code} {response.reason_phrase}")
+                    raise ConnectionError(
+                        f"{provider} API server error. The service may be temporarily unavailable.\n"
+                        f"Model: {model}\n"
+                        f"Base URL: {base_url}\n"
+                        f"HTTP {response.status_code}: {response.reason_phrase}"
+                    )
+                else:
+                    logger.error(f"{provider} API validation failed: {response.status_code} {response.reason_phrase}")
+                    raise ValueError(
+                        f"{provider} API validation failed.\n"
+                        f"Model: {model}\n"
+                        f"Base URL: {base_url}\n"
+                        f"HTTP {response.status_code}: {response.reason_phrase}"
+                    )
+
+        except httpx.TimeoutException as e:
+            logger.warning(f"{provider} API connection timeout on attempt {attempt}/{attempts}: {e}")
+            if attempt >= attempts:
                 raise ConnectionError(
-                    f"{provider} API rate limited. Please try again later.\n"
+                    f"{provider} API connection timeout. Please check your network or base_url.\n"
                     f"Model: {model}\n"
                     f"Base URL: {base_url}\n"
-                    f"HTTP {response.status_code}: {response.reason_phrase}"
+                    f"Error: Connection timed out after {timeout} seconds"
                 )
-            elif response.status_code >= 500:
-                logger.error(f"{provider} API server error: {response.status_code} {response.reason_phrase}")
+        except httpx.ConnectError as e:
+            logger.warning(f"{provider} API connection failed on attempt {attempt}/{attempts}: {e}")
+            if attempt >= attempts:
                 raise ConnectionError(
-                    f"{provider} API server error. The service may be temporarily unavailable.\n"
+                    f"{provider} API connection failed. Please check your network or base_url.\n"
                     f"Model: {model}\n"
                     f"Base URL: {base_url}\n"
-                    f"HTTP {response.status_code}: {response.reason_phrase}"
+                    f"Error: Unable to connect to the API endpoint"
                 )
-            else:
-                logger.error(f"{provider} API validation failed: {response.status_code} {response.reason_phrase}")
-                raise ValueError(
-                    f"{provider} API validation failed.\n"
-                    f"Model: {model}\n"
-                    f"Base URL: {base_url}\n"
-                    f"HTTP {response.status_code}: {response.reason_phrase}"
-                )
-                
-    except httpx.TimeoutException as e:
-        logger.warning(f"{provider} API connection timeout: {e}")
-        raise ConnectionError(
-            f"{provider} API connection timeout. Please check your network or base_url.\n"
-            f"Model: {model}\n"
-            f"Base URL: {base_url}\n"
-            f"Error: Connection timed out after 10 seconds"
-        )
-    except httpx.ConnectError as e:
-        logger.warning(f"{provider} API connection failed: {e}")
-        raise ConnectionError(
-            f"{provider} API connection failed. Please check your network or base_url.\n"
-            f"Model: {model}\n"
-            f"Base URL: {base_url}\n"
-            f"Error: Unable to connect to the API endpoint"
-        )
-    except Exception as e:
-        logger.error(f"{provider} API validation failed with unexpected error: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"{provider} API validation failed with unexpected error: {e}")
+            raise
+
+        await asyncio.sleep(retry_delay_s * attempt)
 
 @dataclass
 class ClientContext:

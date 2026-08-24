@@ -55,6 +55,7 @@ tmp/
 temp/
 .server_cache/
 .storyline/.server_cache/
+.storyline/run/
 
 # 本项目可能产生的大文件目录
 outputs/

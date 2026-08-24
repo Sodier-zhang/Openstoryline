@@ -155,11 +155,20 @@ class RecommendScriptTemplateConfig(ConfigBaseModel):
 
 class GenerateVoiceoverConfig(ConfigBaseModel):
     tts_provider_params_path: Path = Field(..., description="TTS provider config file path")
+    default_provider: str = "doubao_tts_2"
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class GenerateAITransitionConfig(ConfigBaseModel):
     default_provider: str = "dashscope"
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+class ResultUploadConfig(ConfigBaseModel):
+    enabled: bool = False
+    upload_temp_url: str = ""
+    access_token: str = Field(default="", json_schema_extra={"resolve_relative": False})
+    title: str = "openstoryline-result.mp4"
+    description: str = "OpenStoryline rendered video"
+    timeout: float = 120.0
 
 class SelectBGMConfig(ConfigBaseModel):
     sample_rate: int = 22050
@@ -256,6 +265,7 @@ class Settings(ConfigBaseModel):
     script_template: RecommendScriptTemplateConfig
     generate_voiceover: GenerateVoiceoverConfig
     generate_ai_transition: GenerateAITransitionConfig
+    result_upload: ResultUploadConfig = Field(default_factory=ResultUploadConfig)
     select_bgm: SelectBGMConfig
     recommend_text: RecommendTextConfig
     plan_timeline: PlanTimelineConfig
