@@ -58,7 +58,7 @@ from open_storyline.config import Settings
 from open_storyline.storage.agent_memory import ArtifactStore
 from open_storyline.mcp.hooks.node_interceptors import ToolInterceptor
 from open_storyline.mcp.hooks.chat_middleware import set_mcp_log_sink, reset_mcp_log_sink
-from open_storyline.api.auto_edit_routes import register_auto_edit_routes
+from open_storyline.api.Yuanji_API_router import register_auto_edit_routes
 
 WEB_DIR = os.path.join(ROOT_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
