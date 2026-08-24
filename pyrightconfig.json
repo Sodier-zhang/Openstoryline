@@ -1,0 +1,4 @@
+{
+  "include": ["src", "agent_fastapi.py", "cli.py"],
+  "extraPaths": ["src"]
+}

@@ -23,6 +23,7 @@ dependencies = [
     "mcp==1.26.0",
     "moviepy==2.2.1",
     "openai==2.16.0",
+    "requests==2.34.2",
     "sentence-transformers==5.2.2",
     "skillkit==0.4.0",
     "tomli>=2.4.1",
