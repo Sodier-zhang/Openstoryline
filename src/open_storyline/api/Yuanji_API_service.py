@@ -12,11 +12,11 @@ from typing import Any, Awaitable, Callable, List, Literal, Optional
 
 import requests
 from fastapi import BackgroundTasks, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from open_storyline.storage.agent_memory import ArtifactStore
+from open_storyline.usage_billing import read_usage_summary
 
 
 UploadMediaService = Callable[
@@ -24,6 +24,7 @@ UploadMediaService = Callable[
     Awaitable[Any],
 ]
 UPLOAD_MEDIA_SERVICE_STATE_KEY = "auto_edit_upload_media_service"
+STALE_PROCESSING_GRACE_SECONDS = 10.0
 
 EditStatus = Literal["idle", "processing", "completed", "failed"]
 
@@ -41,9 +42,8 @@ class SubmitEditResponse(BaseModel):
 class EditResultResponse(BaseModel):
     status: EditStatus
     media_id: Optional[str] = None
-    url: Optional[str] = None
     video_url: Optional[str] = None
-    local_video_url: Optional[str] = None
+    billing: Optional[dict[str, Any]] = None
     upload_error: Optional[str] = None
     error: Optional[str] = None
 
@@ -65,12 +65,16 @@ def set_edit_state(
     upload_error: str = "",
     error: str = "",
 ) -> None:
+    now = time.time()
     sess.auto_edit_status = status
     sess.auto_edit_result_path = result_path
     sess.auto_edit_public_video_url = public_video_url
     sess.auto_edit_result_media_id = result_media_id
     sess.auto_edit_upload_error = upload_error
     sess.auto_edit_error = error
+    if status == "processing":
+        sess.auto_edit_started_at = now
+    sess.auto_edit_updated_at = now
 
 
 def get_edit_status(sess: Any) -> EditStatus:
@@ -94,25 +98,6 @@ def format_exception(exc: BaseException) -> str:
 def result_media_id(result_path: str) -> str:
     digest = hashlib.sha1(str(Path(result_path).resolve()).encode("utf-8")).hexdigest()
     return f"result_{digest[:10]}"
-
-
-def public_base_url(request: Request) -> str:
-    configured = os.getenv("OPENSTORYLINE_PUBLIC_BASE_URL", "").strip()
-    if configured:
-        return configured.rstrip("/")
-
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    if forwarded_host:
-        proto = (forwarded_proto or request.url.scheme or "http").split(",", 1)[0].strip()
-        host = forwarded_host.split(",", 1)[0].strip()
-        return f"{proto}://{host}".rstrip("/")
-
-    return str(request.base_url).rstrip("/")
-
-
-def result_video_url(request: Request, session_id: str) -> str:
-    return f"{public_base_url(request)}/api/sessions/{session_id}/result.mp4"
 
 
 def result_upload_config(sess: Any) -> dict[str, Any]:
@@ -196,9 +181,70 @@ def merge_system_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
     return [SystemMessage(content="\n\n".join(system_parts)), *non_system]
 
 
+def should_route_to_add_subtitle_workflow(payload: AutoEditRequest) -> bool:
+    requirement = str(payload.requirement or "").strip().lower()
+    text = str(payload.text or "").strip().lower()
+    combined = f"{requirement}\n{text}"
+    keywords = (
+        "添加字幕",
+        "加字幕",
+        "加上字幕",
+        "生成字幕",
+        "自动字幕",
+        "字幕版",
+        "烧录字幕",
+        "字幕",
+        "subtitle",
+        "subtitles",
+        "caption",
+        "captions",
+    )
+    return any(keyword in combined for keyword in keywords)
+
+
+def billing_model_api_keys(cfg: Any) -> dict[str, str]:
+    keys: dict[str, str] = {}
+
+    llm_model = str(getattr(getattr(cfg, "llm", None), "model", "") or "").strip()
+    llm_key = str(getattr(getattr(cfg, "llm", None), "api_key", "") or "").strip()
+    if llm_model and llm_key:
+        keys[llm_model] = llm_key
+
+    vlm_model = str(getattr(getattr(cfg, "vlm", None), "model", "") or "").strip()
+    vlm_key = str(getattr(getattr(cfg, "vlm", None), "api_key", "") or "").strip()
+    if vlm_model and vlm_key:
+        keys[vlm_model] = vlm_key
+
+    ai_transition = getattr(cfg, "generate_ai_transition", None)
+    providers = getattr(ai_transition, "providers", None) or {}
+    for provider_cfg in providers.values():
+        if not isinstance(provider_cfg, dict):
+            continue
+        model = str(provider_cfg.get("model_name") or provider_cfg.get("model") or "").strip()
+        api_key = str(provider_cfg.get("api_key") or "").strip()
+        if model and api_key:
+            keys[model] = api_key
+
+    return keys
+
+
 def build_auto_edit_prompt(payload: AutoEditRequest) -> str:
     media_list = "\n".join(f"- {media_id}" for media_id in payload.media_ids)
+    matched_workflow = ""
+    if should_route_to_add_subtitle_workflow(payload):
+        matched_workflow = (
+            "当前已预匹配到专项 WORKFLOW SKILL："
+            "`.storyline/skills/add_subtitle_workflow_skill/SKILL.md` 对应的 "
+            "`add_subtitle_workflow_skill`。\n"
+        )
     return (
+        "【工作流路由规则】在调用任何剪辑 Node/tool 之前，必须先判断是否有可用的 "
+        "【WORKFLOW SKILL】适合当前任务。若有匹配的专项 WORKFLOW SKILL，第一步必须先调用该 skill，"
+        "然后严格按照该 skill 中定义的工具顺序执行；若没有任何专项 WORKFLOW SKILL 匹配，"
+        "第一步必须调用 `default_editing_workflow_skill`，再按默认工作流执行。"
+        "禁止在未调用 WORKFLOW SKILL 的情况下直接调用 `load_media`、`split_shots`、"
+        "`local_asr`、`render_video` 等剪辑 Node/tool。\n"
+        f"{matched_workflow}\n"
         "当前请求来自自动剪辑 REST API。请不要停留在剪辑计划确认阶段，"
         "请直接根据用户文案、剪辑要求和已上传素材完成自动剪辑，并在最终阶段调用 render_video 输出成片。\n\n"
         f"用户文案：\n{payload.text}\n\n"
@@ -244,6 +290,40 @@ async def complete_with_render_output(store: Any, sess: Any, output_path: str) -
         public_video_url=public_url,
         result_media_id=remote_media_id,
         upload_error=upload_error,
+    )
+    await save_session_state(store, sess)
+
+
+def processing_state_can_be_reconciled(sess: Any) -> bool:
+    if get_edit_status(sess) != "processing":
+        return False
+    lock = getattr(sess, "chat_lock", None)
+    if lock is not None and lock.locked():
+        return False
+
+    updated_at = float(getattr(sess, "auto_edit_updated_at", 0.0) or 0.0)
+    if updated_at <= 0:
+        return True
+    return (time.time() - updated_at) >= STALE_PROCESSING_GRACE_SECONDS
+
+
+async def reconcile_auto_edit_state(store: Any, sess: Any) -> None:
+    """
+    Repair a stale processing state left behind after a background auto-edit task
+    has already stopped. This prevents later submissions from being blocked forever.
+    """
+    if not processing_state_can_be_reconciled(sess):
+        return
+
+    output_path = latest_render_output_path(sess)
+    if output_path:
+        await complete_with_render_output(store, sess, output_path)
+        return
+
+    set_edit_state(
+        sess,
+        status="failed",
+        error="previous auto edit task stopped without updating status",
     )
     await save_session_state(store, sess)
 
@@ -375,6 +455,8 @@ async def submit_auto_edit_task(
     store = session_store(request)
     sess = await store.get_or_404(session_id)
 
+    await reconcile_auto_edit_state(store, sess)
+
     if get_edit_status(sess) == "processing" or sess.chat_lock.locked():
         raise HTTPException(status_code=409, detail="current edit task is still processing")
 
@@ -393,12 +475,29 @@ async def get_auto_edit_result(session_id: str, request: Request) -> EditResultR
     store = session_store(request)
     sess = await store.get_or_404(session_id)
 
+    await reconcile_auto_edit_state(store, sess)
+
     status = get_edit_status(sess)
     if status == "failed" and not str(getattr(sess, "auto_edit_result_path", "") or ""):
         output_path = latest_render_output_path(sess)
         if output_path:
             await complete_with_render_output(store, sess, output_path)
             status = get_edit_status(sess)
+
+    billing_end_at = float(getattr(sess, "auto_edit_updated_at", 0.0) or 0.0)
+    if status == "processing":
+        billing_end_at = time.time()
+    billing = read_usage_summary(
+        sess.cfg.project.outputs_dir,
+        session_id,
+        currency=str(getattr(sess.cfg.billing, "currency", "USD") or "USD"),
+        billing_cfg=getattr(sess.cfg, "billing", None),
+        model_api_keys=billing_model_api_keys(sess.cfg),
+        started_at=float(getattr(sess, "auto_edit_started_at", 0.0) or 0.0),
+        ended_at=billing_end_at,
+    )
+    sess.auto_edit_billing = billing
+    await save_session_state(store, sess)
 
     if status == "completed":
         result_path = str(getattr(sess, "auto_edit_result_path", "") or "")
@@ -416,45 +515,18 @@ async def get_auto_edit_result(session_id: str, request: Request) -> EditResultR
             sess.auto_edit_upload_error = upload_error
             await save_session_state(store, sess)
 
-        local_video_url = result_video_url(request, session_id)
         return EditResultResponse(
             status=status,
             media_id=remote_media_id or (result_media_id(result_path) if result_path else None),
-            url=public_video_url or None,
             video_url=public_video_url or None,
-            local_video_url=local_video_url,
+            billing=billing,
             upload_error=upload_error or None,
         )
     if status == "failed":
         return EditResultResponse(
             status=status,
+            billing=billing,
             error=str(getattr(sess, "auto_edit_error", "") or "auto edit failed"),
         )
-    return EditResultResponse(status=status)
+    return EditResultResponse(status=status, billing=billing)
 
-
-async def download_auto_edit_result(session_id: str, request: Request) -> FileResponse:
-    store = session_store(request)
-    sess = await store.get_or_404(session_id)
-
-    if get_edit_status(sess) != "completed":
-        raise HTTPException(status_code=404, detail="result video is not ready")
-
-    result_path = str(getattr(sess, "auto_edit_result_path", "") or "")
-    if not result_path or not os.path.exists(result_path):
-        raise HTTPException(status_code=404, detail="result video not found")
-
-    outputs_root = Path(sess.cfg.project.outputs_dir).resolve()
-    cache_root = Path(sess.cfg.local_mcp_server.server_cache_dir)
-    if not cache_root.is_absolute():
-        cache_root = Path.cwd() / cache_root
-    allowed_roots = (outputs_root, cache_root.resolve())
-    resolved_result = Path(result_path).resolve()
-    if not any(resolved_result.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="forbidden")
-
-    return FileResponse(
-        str(resolved_result),
-        media_type="video/mp4",
-        filename=resolved_result.name,
-    )

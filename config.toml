@@ -26,6 +26,41 @@ timeout = 20.0 # 单位：秒
 temperature = 0.1
 max_retries = 2
 
+# ============= 大模型真实账单 / LLM Actual Billing ======================
+# 只展示服务商真实账单消费，不使用 token 估算费用。
+# Only show actual provider billing, never token-based estimates.
+[billing]
+enabled = true
+currency = "USD"
+provider = ""
+timeout = 30.0
+method = "GET"
+auth_header = "Authorization"
+auth_scheme = "Bearer"
+session_param = "session_id"
+model_param = "model"
+start_param = "start_time"
+end_param = "end_time"
+request_ids_param = "request_ids"
+time_format = "unix"
+records_path = "records"
+amount_field = "amount"
+currency_field = "currency"
+request_id_field = "request_id"
+total_cost_field = "total_cost"
+
+[billing.per_call_costs.deepseek-v4-flash]
+amount = 0.0
+currency = "USD"
+
+[billing.per_call_costs.qwen3-vl-plus]
+amount = 0.0
+currency = "USD"
+
+[billing.per_call_costs."wan2.2-kf2v-flash"]
+amount = 0.0
+currency = "USD"
+
 # ============= MCP Server 相关 / MCP Server Related =============
 [local_mcp_server]
 server_name = "storyline"
@@ -121,7 +156,6 @@ api_key = ""
 [result_upload]
 enabled = true
 upload_temp_url = "http://192.168.31.220:8081/marketing/api/file/uploadTemp"
-access_token = ""
 title = "openstoryline-result.mp4"
 description = "OpenStoryline rendered video"
 timeout = 120.0

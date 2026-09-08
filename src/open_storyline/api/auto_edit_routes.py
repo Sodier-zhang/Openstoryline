@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from open_storyline.api.Yuanji_API_router import (
     create_edit_session,
-    download_auto_edit_result,
     get_auto_edit_result,
     register_auto_edit_routes,
     router,
@@ -24,7 +23,6 @@ __all__ = [
     "SubmitEditResponse",
     "UploadMediaService",
     "create_edit_session",
-    "download_auto_edit_result",
     "get_auto_edit_result",
     "register_auto_edit_routes",
     "router",

@@ -121,8 +121,9 @@ class SamplingLLMClient(LLMClient):
     Server passes media paths and timestamps to Client, Client handles base64 conversion.
     """
 
-    def __init__(self, sampler: BaseLLMSampling):
+    def __init__(self, sampler: BaseLLMSampling, default_metadata: dict[str, Any] | None = None):
         self._sampler = sampler
+        self._default_metadata = dict(default_metadata or {})
 
     async def complete(self,
         *,
@@ -143,7 +144,8 @@ class SamplingLLMClient(LLMClient):
             )
         ]
 
-        merged_metadata = dict(metadata or {})
+        merged_metadata = dict(self._default_metadata)
+        merged_metadata.update(dict(metadata or {}))
         merged_metadata["modality"] = "multimodal" if media else "text"
         if media:
             merged_metadata["media"] = media # Critical: Pass media paths and timestamps through transparently
@@ -159,7 +161,7 @@ class SamplingLLMClient(LLMClient):
             stop_sequences=stop_sequences,
         )
 
-def make_llm(mcp_ctx: Context[ServerSession, object]) -> LLMClient:
+def make_llm(mcp_ctx: Context[ServerSession, object], default_metadata: dict[str, Any] | None = None) -> LLMClient:
     # Tools can directly call llm.complete() via llm = make_llm(ctx)
-    return SamplingLLMClient(MCPSampler(mcp_ctx))
+    return SamplingLLMClient(MCPSampler(mcp_ctx), default_metadata=default_metadata)
     

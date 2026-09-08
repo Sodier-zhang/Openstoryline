@@ -47,7 +47,16 @@ def create_tool_wrapper(node: BaseNode, input_schema: type[BaseModel]):
             artifact_id=params['artifact_id'],
             lang=params.get('lang', 'zh'),
             node_summary=NodeSummary(),
-            llm=make_llm(mcp_ctx),
+            llm=make_llm(
+                mcp_ctx,
+                default_metadata={
+                    "session_id": session_id,
+                    "artifact_id": params["artifact_id"],
+                    "node_id": getattr(meta, "node_id", ""),
+                    "node_name": getattr(meta, "name", ""),
+                    "node_kind": getattr(meta, "node_kind", ""),
+                },
+            ),
             mcp_ctx=mcp_ctx,
         )
         result = await node(node_state, **params)

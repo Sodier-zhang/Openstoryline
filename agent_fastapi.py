@@ -1345,6 +1345,9 @@ class ChatSession:
         self.auto_edit_result_media_id: str = ""
         self.auto_edit_upload_error: str = ""
         self.auto_edit_error: str = ""
+        self.auto_edit_started_at: float = 0.0
+        self.auto_edit_updated_at: float = 0.0
+        self.auto_edit_billing: Dict[str, Any] = {}
 
     @classmethod
     def state_file_path_for(cls, session_id: str, cfg: Settings) -> str:
@@ -1595,6 +1598,9 @@ class ChatSession:
                 "result_media_id": self.auto_edit_result_media_id,
                 "upload_error": self.auto_edit_upload_error,
                 "error": self.auto_edit_error,
+                "started_at": float(getattr(self, "auto_edit_started_at", 0.0) or 0.0),
+                "updated_at": float(getattr(self, "auto_edit_updated_at", 0.0) or 0.0),
+                "billing": _to_json_safe(getattr(self, "auto_edit_billing", {}) or {}),
             },
         }
 
@@ -1760,6 +1766,16 @@ class ChatSession:
             sess.auto_edit_result_media_id = str(auto_edit.get("result_media_id") or "")
             sess.auto_edit_upload_error = str(auto_edit.get("upload_error") or "")
             sess.auto_edit_error = str(auto_edit.get("error") or "")
+            try:
+                sess.auto_edit_started_at = float(auto_edit.get("started_at") or 0.0)
+            except Exception:
+                sess.auto_edit_started_at = 0.0
+            try:
+                sess.auto_edit_updated_at = float(auto_edit.get("updated_at") or 0.0)
+            except Exception:
+                sess.auto_edit_updated_at = 0.0
+            billing = auto_edit.get("billing")
+            sess.auto_edit_billing = billing if isinstance(billing, dict) else {}
             if sess.auto_edit_status == "processing":
                 sess.auto_edit_status = "failed"
                 sess.auto_edit_result_path = ""
@@ -1767,6 +1783,7 @@ class ChatSession:
                 sess.auto_edit_result_media_id = ""
                 sess.auto_edit_upload_error = ""
                 sess.auto_edit_error = "auto edit task was interrupted by server restart"
+                sess.auto_edit_updated_at = time.time()
 
         lc_msgs_raw = data.get("lc_messages_serialized") or []
         lc_msgs: List[BaseMessage] = []

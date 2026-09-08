@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse
 
 from open_storyline.api.Yuanji_API_service import (
     UPLOAD_MEDIA_SERVICE_STATE_KEY,
@@ -12,7 +11,6 @@ from open_storyline.api.Yuanji_API_service import (
     SubmitEditResponse,
     UploadMediaService,
     create_edit_session as create_edit_session_service,
-    download_auto_edit_result as download_auto_edit_result_service,
     get_auto_edit_result as get_auto_edit_result_service,
     submit_auto_edit_task as submit_auto_edit_task_service,
     upload_edit_media as upload_edit_media_service,
@@ -68,16 +66,6 @@ async def submit_auto_edit_task(
 )
 async def get_auto_edit_result(session_id: str, request: Request) -> EditResultResponse:
     return await get_auto_edit_result_service(session_id, request)
-
-
-@router.get(
-    "/sessions/{session_id}/result.mp4",
-    tags=["Auto Edit"],
-    summary="下载剪辑完成的视频",
-    include_in_schema=False,
-)
-async def download_auto_edit_result(session_id: str, request: Request) -> FileResponse:
-    return await download_auto_edit_result_service(session_id, request)
 
 
 def register_auto_edit_routes(

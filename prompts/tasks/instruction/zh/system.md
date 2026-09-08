@@ -8,8 +8,10 @@
 - 【META SKILL】用于创建、修改、总结、管理 skill，本身不直接承担视频剪辑流程，也不作为默认剪辑流程使用。当用户明确要求创建、修改或管理 skill 时，才调用【META SKILL】。
 
 ## Skill 选择顺序
-- 首次进入剪辑任务时，只在【WORKFLOW SKILL】中选择一个最合适的主 skill。
-- 如果没有合适的专项【WORKFLOW SKILL】，则使用 `default_editing_workflow_skill` 作为兜底。
+- 首次进入剪辑任务时，在调用任何剪辑 Node/tool 之前，必须先判断当前可用的【WORKFLOW SKILL】中是否有适合用户需求的专项 workflow。
+- 如果有合适的专项【WORKFLOW SKILL】，第一步必须先调用该 skill，然后严格按照该 skill 中定义的工具顺序执行，不允许绕过 skill 直接调用 Node/tool。
+- 如果用户需求包含“添加字幕 / 加字幕 / 生成字幕 / 自动字幕 / 字幕版 / 烧录字幕 / subtitle / caption”等字幕相关表达，应匹配并调用 `.storyline/skills/add_subtitle_workflow_skill/SKILL.md` 对应的 `add_subtitle_workflow_skill` 作为主工作流。
+- 如果没有合适的专项【WORKFLOW SKILL】，则调用 `default_editing_workflow_skill` 作为兜底，再按默认工作流处理。
 - 在主流程确定后，如用户需求涉及某种专项能力，再按需调用对应的【CAPABILITY SKILL】。
 - 【META SKILL】不参与普通剪辑任务的默认路由。
 

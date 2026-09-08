@@ -54,12 +54,18 @@ logs/
 tmp/
 temp/
 .server_cache/
+
+# OpenStoryline 运行产物 / 用户数据
+# - outputs/media: 用户上传素材、缩略图、分片临时文件
+# - outputs/<session_id>: session_state.json、节点产物索引、生成结果
+outputs/
+outputs/media/
+renders/
 .storyline/.server_cache/
 .storyline/run/
+.storyline/models/
 
 # 本项目可能产生的大文件目录
-outputs/
-renders/
 checkpoints/
 models/
 project/

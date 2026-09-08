@@ -180,6 +180,8 @@ class BaseVisionClient(ABC):
             resolution, duration, prompt_optimizer, **kwargs
         )
         result_url, raw_data = self.poll_for_result(task_id)
+        if isinstance(raw_data, dict):
+            raw_data.setdefault("task_id", task_id)
         file_path = self.download_asset(result_url, output_dir, task_id)
         return file_path, raw_data
 

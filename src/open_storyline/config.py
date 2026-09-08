@@ -170,6 +170,31 @@ class ResultUploadConfig(ConfigBaseModel):
     description: str = "OpenStoryline rendered video"
     timeout: float = 120.0
 
+class BillingConfig(ConfigBaseModel):
+    enabled: bool = True
+    currency: str = "USD"
+    provider: str = ""
+    timeout: float = 30.0
+    method: Literal["GET", "POST"] = "GET"
+    auth_header: str = "Authorization"
+    auth_scheme: str = "Bearer"
+    session_param: str = "session_id"
+    model_param: str = "model"
+    start_param: str = "start_time"
+    end_param: str = "end_time"
+    request_ids_param: str = "request_ids"
+    time_format: Literal["unix", "iso"] = "unix"
+    records_path: str = "records"
+    amount_field: str = "amount"
+    currency_field: str = "currency"
+    request_id_field: str = "request_id"
+    total_cost_field: str = "total_cost"
+    per_call_costs: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    model_prices: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description="Deprecated. Token price estimates are not used for billing display.",
+    )
+
 class SelectBGMConfig(ConfigBaseModel):
     sample_rate: int = 22050
     hop_length: int = 2048
@@ -266,6 +291,7 @@ class Settings(ConfigBaseModel):
     generate_voiceover: GenerateVoiceoverConfig
     generate_ai_transition: GenerateAITransitionConfig
     result_upload: ResultUploadConfig = Field(default_factory=ResultUploadConfig)
+    billing: BillingConfig = Field(default_factory=BillingConfig)
     select_bgm: SelectBGMConfig
     recommend_text: RecommendTextConfig
     plan_timeline: PlanTimelineConfig
