@@ -15,7 +15,7 @@ import logging
 import shutil
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Set
 from contextlib import asynccontextmanager
 from starlette.websockets import WebSocketState, WebSocketDisconnect
 try:
@@ -818,7 +818,7 @@ def _headers_to_dict(scope_headers: List[Tuple[bytes, bytes]]) -> Dict[str, str]
         d[dk] = dv
     return d
 
-def _client_ip_from_http_scope(scope: dict, trust_proxy_headers: bool) -> str:
+def _client_ip_from_http_scope(scope: Mapping[str, Any], trust_proxy_headers: bool) -> str:
     headers = _headers_to_dict(scope.get("headers") or [])
     if trust_proxy_headers:
         xff = headers.get("x-forwarded-for")
@@ -1286,7 +1286,7 @@ class ChatSession:
 
         self.developer_mode = is_developer_mode(cfg)
 
-        self.media_dir = resolve_media_dir(cfg.project.media_dir, session_id)
+        self.media_dir = resolve_media_dir(str(cfg.project.media_dir), session_id)
         self.media_store = MediaStore(self.media_dir)
         # 分片上传临时目录 + in-flight 状态
         self.uploads_dir = ensure_uploads_dir(self.media_dir)
@@ -2035,25 +2035,28 @@ class ChatSession:
             self._agent_build_key = agent_build_key
 
         if self.client_context is None:
+            node_manager = self.node_manager
+            if node_manager is None:
+                raise RuntimeError("Node manager was not initialized")
             self.client_context = ClientContext(
                 cfg=self.cfg,
                 session_id=self.session_id,
                 media_dir=self.media_dir,
-                bgm_dir=self.cfg.project.bgm_dir,
-                outputs_dir=self.cfg.project.outputs_dir,
-                node_manager=self.node_manager,
+                bgm_dir=str(self.cfg.project.bgm_dir),
+                outputs_dir=str(self.cfg.project.outputs_dir),
+                node_manager=node_manager,
                 chat_model_key=self.chat_model_key,
                 vlm_model_key=self.vlm_model_key,
-                tts_config=(self.tts_config or None),
-                ai_transition_config=(self.ai_transition_config or None),
+                tts_config=self.tts_config,
+                ai_transition_config=self.ai_transition_config,
                 pexels_api_key=None,
                 lang=self.lang,
             )
         else:
             self.client_context.chat_model_key = self.chat_model_key
             self.client_context.vlm_model_key = self.vlm_model_key
-            self.client_context.tts_config = (self.tts_config or None)
-            self.client_context.ai_transition_config = (self.ai_transition_config or None)
+            self.client_context.tts_config = self.tts_config
+            self.client_context.ai_transition_config = self.ai_transition_config
             self.client_context.lang = self.lang
 
         # ---- resolve pexels_api_key for runtime context ----
@@ -3705,6 +3708,8 @@ async def ws_chat(ws: WebSocket, session_id: str):
 
                                     if kind == "mcp":
                                         raw = payload
+                                        if not isinstance(raw, dict):
+                                            continue
 
                                         if raw.get("type") == "tool_start":
                                             await flush_segment(send_flush_event=True)

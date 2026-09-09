@@ -1,4 +1,14 @@
 {
   "include": ["src", "agent_fastapi.py", "cli.py"],
-  "extraPaths": ["src"]
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "off",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": ["src"],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": ["src"]
+    }
+  ]
 }

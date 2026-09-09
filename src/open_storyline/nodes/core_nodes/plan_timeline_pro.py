@@ -164,7 +164,7 @@ class TimeLine:
         return music_offset, new_meterial_durations
 
 
-    def time_margin(self, cfg: PlanTimelineProConfig):
+    def time_margin(self, cfg: PlanTimelineProConfig) -> int:
         mode, min_time_margin, max_time_margin = cfg.tts_margin_mode, cfg.min_tts_margin, cfg.max_tts_margin
         if mode == "random":
             return random.randint(min_time_margin, max_time_margin) 
@@ -174,8 +174,9 @@ class TimeLine:
             return min_time_margin
         elif mode == "max":
             return max_time_margin
+        raise ValueError(f"Unsupported tts_margin_mode: {mode}")
     
-    def text_tts_offset(self, cfg: PlanTimelineProConfig):
+    def text_tts_offset(self, cfg: PlanTimelineProConfig) -> int:
         mode, min_text_tts_offset, max_text_tts_offset = cfg.text_tts_offset_mode, cfg.min_text_tts_offset, cfg.max_text_tts_offset
         if mode == "random":
             return random.randint(min_text_tts_offset, max_text_tts_offset) 
@@ -185,6 +186,7 @@ class TimeLine:
             return min_text_tts_offset
         elif mode == "max":
             return max_text_tts_offset
+        raise ValueError(f"Unsupported text_tts_offset_mode: {mode}")
 
     def edit_tts_timeline(
         self,
