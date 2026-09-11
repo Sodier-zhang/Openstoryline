@@ -22,6 +22,18 @@ from open_storyline.usage_billing import append_usage_record
 
 logger = logging.getLogger(__name__)
 
+def _create_local_mcp_http_client(
+    headers: dict[str, Any] | None = None,
+    timeout: Any = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        auth=auth,
+        trust_env=False,
+    )
+
 async def validate_api_key(base_url: str, api_key: str, model: str, provider: str = "LLM", timeout: float = 10.0) -> bool:
     """
     Validate API key by sending a direct HTTP request to the OpenAI-compatible API.
@@ -151,6 +163,10 @@ class ClientContext:
     ai_transition_config: dict[str, Any] = field(default_factory=dict) # AI transition config at runtime
     llm_pool: dict[tuple[str, bool], ChatOpenAI] = field(default_factory=dict)
     lang: str = "zh" # Default language: Chinese
+    selected_media_paths: Optional[set[str]] = None
+    active_workflow: Optional[str] = None
+    workflow_started_at: Optional[float] = None
+    workflow_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 async def build_agent(
@@ -239,6 +255,7 @@ async def build_agent(
             "sse_read_timeout": timedelta(minutes=30),
             "headers": {"X-Storyline-Session-Id": session_id},
             "session_kwargs": {"sampling_callback": sampling_callback},
+            "httpx_client_factory": _create_local_mcp_http_client,
         },
     }
 

@@ -351,7 +351,7 @@ class PlanTimelineProNode(BaseNode):
     meta = NodeMeta(
         name="plan_timeline_pro",
         description=(
-            "Create a coherent timeline by arranging video clips, subtitles, voice-over, and background music. "
+            "Create a coherent standard or montage timeline from available media. "
         ),
         node_id="plan_timeline_pro",
         node_kind="plan_timeline",
@@ -376,6 +376,14 @@ class PlanTimelineProNode(BaseNode):
         return await self.process(node_state, inputs)
 
     async def process(self, node_state: NodeState,  inputs: Dict[str, Any]) -> Any:
+        if inputs.get("is_montage", False):
+            return {
+                "montage_tracks": self._build_montage_tracks(
+                    inputs.get("montage", {}),
+                    user_request=inputs.get("user_request", ""),
+                )
+            }
+
         music = inputs.pop("music", None)
         tts_res = inputs.pop("tts_res", None)
         is_speech_rough_cut = inputs.get("is_speech_rough_cut", False)
@@ -445,6 +453,9 @@ class PlanTimelineProNode(BaseNode):
         """
         Change output format.
         """
+        if "montage_tracks" in outputs:
+            return {"tracks": outputs["montage_tracks"]}
+
         tracks, video, subtitles, voiceover, bgm = [], [], [], [], []
         timeline_source_data = outputs.get('timeline_source_data', {})
         
@@ -556,9 +567,119 @@ class PlanTimelineProNode(BaseNode):
             "bgm": bgm,
         }
         return {"tracks": tracks}
-    
+
+    def _build_montage_tracks(
+        self,
+        montage: Dict[str, Any],
+        *,
+        user_request: str = "",
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        clips = montage.get("clips") or []
+        groups = montage.get("groups") or []
+        segments = montage.get("segments") or []
+        clips_by_id = {
+            clip.get("clip_id"): clip
+            for clip in clips
+            if isinstance(clip, dict) and clip.get("clip_id")
+        }
+        segments_by_id = {
+            segment.get("segment_id"): segment
+            for segment in segments
+            if isinstance(segment, dict) and segment.get("segment_id")
+        }
+
+        video: List[Dict[str, Any]] = []
+        timeline_start = 0
+        transition_instruction = str(user_request or "").strip()
+
+        for group in groups:
+            group_id = str(group.get("group_id") or "").strip()
+            clip_ids = group.get("clip_ids") or []
+            if not group_id or not clip_ids:
+                raise ValueError("Each montage group must have a group_id and at least one clip")
+
+            missing_clip_ids = [clip_id for clip_id in clip_ids if clip_id not in clips_by_id]
+            if missing_clip_ids:
+                raise ValueError(
+                    f"Montage group {group_id} references missing clips: {missing_clip_ids}"
+                )
+
+            group_clips = [clips_by_id[clip_id] for clip_id in clip_ids]
+            source_durations = [_clip_duration_ms(clip) for clip in group_clips]
+            group_duration = _seconds_to_milliseconds(group.get("duration"))
+            if group_duration <= 0:
+                group_duration = sum(source_durations)
+            if group_duration <= 0:
+                raise ValueError(f"Montage group {group_id} has no usable duration")
+
+            segment = segments_by_id.get(group_id, {})
+            allocations = _allocate_montage_durations(
+                group_duration,
+                source_durations,
+                group_clips,
+                source_type=str(segment.get("source_type") or ""),
+            )
+
+            for clip, source_duration, timeline_duration in zip(
+                group_clips,
+                source_durations,
+                allocations,
+            ):
+                source_ref = clip.get("source_ref") or {}
+                source_start = int(source_ref.get("start", 0) or 0)
+                source_window_duration = min(source_duration, timeline_duration)
+                source_path = str(clip.get("path") or "").strip()
+                if not source_path:
+                    raise ValueError(f"Montage clip {clip.get('clip_id')} has no source path")
+
+                video.append(
+                    {
+                        "clip_id": clip["clip_id"],
+                        "group_id": group_id,
+                        "kind": clip.get("kind", "video"),
+                        "fps": clip.get("fps"),
+                        "size": [
+                            source_ref.get("width", 576),
+                            source_ref.get("height", 1024),
+                        ],
+                        "source_path": source_path,
+                        "source_window": {
+                            "start": source_start,
+                            "end": source_start + source_window_duration,
+                            "duration": source_window_duration,
+                        },
+                        "timeline_window": {
+                            "start": timeline_start,
+                            "end": timeline_start + timeline_duration,
+                            "duration": timeline_duration,
+                        },
+                        "playback_rate": 1.0,
+                        "continuity_hint": str(segment.get("continuity_hint") or ""),
+                        "transition_instruction": transition_instruction,
+                    }
+                )
+                timeline_start += timeline_duration
+
+        return {
+            "video": video,
+            "subtitles": [],
+            "voiceover": [],
+            "bgm": [],
+        }
+
     def _parse_input(self, node_state: NodeState, inputs, **kwargs):
-        
+        if inputs.get("is_montage", False):
+            montage = inputs.get("generate_montage_video") or {}
+            if not isinstance(montage, dict) or not montage.get("clips"):
+                raise ValueError(
+                    "Montage timeline requires non-empty generate_montage_video output"
+                )
+            return {
+                "is_montage": True,
+                "montage": montage,
+                "user_request": str(inputs.get("user_request") or ""),
+            }
+
         split_shots = inputs.get("split_shots", {})
         group_clips = inputs.get("group_clips", {})
         generate_ai_transition = inputs.get("generate_ai_transition", {})
@@ -728,3 +849,73 @@ class PlanTimelineProNode(BaseNode):
             'speech_rough_cut': speech_rough_cut,
             'title_clip_duration': 0,
         }
+
+
+def _seconds_to_milliseconds(value: Any) -> int:
+    try:
+        return max(0, int(round(float(value or 0) * 1000)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _clip_duration_ms(clip: Dict[str, Any]) -> int:
+    source_ref = clip.get("source_ref") or {}
+    try:
+        duration = int(source_ref.get("duration", 0) or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if duration > 0:
+        return duration
+    try:
+        start = int(source_ref.get("start", 0) or 0)
+        end = int(source_ref.get("end", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, end - start)
+
+
+def _allocate_by_source_duration(total: int, durations: List[int]) -> List[int]:
+    if not durations:
+        return []
+    weights = [max(1, duration) for duration in durations]
+    weight_sum = sum(weights)
+    allocations = [int(total * weight / weight_sum) for weight in weights]
+    allocations[-1] += total - sum(allocations)
+    return allocations
+
+
+def _allocate_montage_durations(
+    total: int,
+    source_durations: List[int],
+    clips: List[Dict[str, Any]],
+    *,
+    source_type: str,
+) -> List[int]:
+    if source_type != "mixed":
+        return _allocate_by_source_duration(total, source_durations)
+
+    generated_indices = [
+        index
+        for index, clip in enumerate(clips)
+        if str(clip.get("clip_id") or "").startswith("montage_generated_")
+    ]
+    uploaded_indices = [index for index in range(len(clips)) if index not in generated_indices]
+    if not uploaded_indices or not generated_indices:
+        return _allocate_by_source_duration(total, source_durations)
+
+    uploaded_total = int(round(total * 0.6))
+    generated_total = total - uploaded_total
+    allocations = [0 for _ in clips]
+    uploaded_allocations = _allocate_by_source_duration(
+        uploaded_total,
+        [source_durations[index] for index in uploaded_indices],
+    )
+    generated_allocations = _allocate_by_source_duration(
+        generated_total,
+        [source_durations[index] for index in generated_indices],
+    )
+    for index, duration in zip(uploaded_indices, uploaded_allocations):
+        allocations[index] = duration
+    for index, duration in zip(generated_indices, generated_allocations):
+        allocations[index] = duration
+    return allocations

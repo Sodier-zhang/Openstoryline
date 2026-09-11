@@ -142,7 +142,13 @@ class NodeManager:
         """Get tool by node_id"""
         return self.id_to_tool.get(node_id)
     
-    def check_excutable(self, session_id:str, store: ArtifactStore, all_require_kind: List[str]) -> Dict[str, Any]:
+    def check_excutable(
+        self,
+        session_id: str,
+        store: ArtifactStore,
+        all_require_kind: List[str],
+        created_after: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
         Check if executable and return unexecuted features
         """
@@ -153,7 +159,10 @@ class NodeManager:
             valid_outputs = []
             for node_id in req_ids_queue:
                 output = store.get_latest_meta(node_id=node_id, session_id=session_id)
-                if output is not None:
+                if (
+                    output is not None
+                    and (created_after is None or output.created_at >= created_after)
+                ):
                     valid_outputs.append(output)
 
             # 2. Identify the most recently created output

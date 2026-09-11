@@ -12,6 +12,7 @@ from open_storyline.api.Yuanji_API_service import (
     UploadMediaService,
     create_edit_session as create_edit_session_service,
     get_auto_edit_result as get_auto_edit_result_service,
+    parse_auto_edit_request,
     submit_auto_edit_task as submit_auto_edit_task_service,
     upload_edit_media as upload_edit_media_service,
 )
@@ -48,13 +49,23 @@ async def upload_edit_media(
     response_model=SubmitEditResponse,
     tags=["Auto Edit"],
     summary="提交自动剪辑任务",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": AutoEditRequest.model_json_schema(by_alias=True),
+                }
+            },
+        }
+    },
 )
 async def submit_auto_edit_task(
     session_id: str,
-    payload: AutoEditRequest,
     request: Request,
     background_tasks: BackgroundTasks,
 ) -> SubmitEditResponse:
+    payload = await parse_auto_edit_request(request)
     return await submit_auto_edit_task_service(session_id, payload, request, background_tasks)
 
 

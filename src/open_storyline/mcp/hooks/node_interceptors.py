@@ -8,7 +8,7 @@ import traceback
 
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from langgraph.types import Command
-from langchain_core.messages import ToolMessage, ToolCall
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import ToolException
 from mcp.types import CallToolResult
 
@@ -92,6 +92,7 @@ class ToolInterceptor:
             artifact_id = store.generate_artifact_id(node_id)
             meta_collector: NodeManager = context.node_manager
             input_data = defaultdict(list)
+            workflow_started_at = getattr(context, "workflow_started_at", None)
 
             client_cfg = getattr(context, "cfg", None)
             inline_base64 = should_inline_media_as_base64(client_cfg)
@@ -99,6 +100,10 @@ class ToolInterceptor:
             def load_collected_data(collected_node, input_data, store):
                 """Load collected node data"""
                 for collect_kind, artifact_meta in collected_node.items():
+                    workflow_output = getattr(context, "workflow_outputs", {}).get(collect_kind)
+                    if workflow_output is not None:
+                        input_data[collect_kind] = workflow_output
+                        continue
                     _, prior_node_output = store.load_result(artifact_meta.artifact_id)
                     compress_payload_to_base64(prior_node_output['payload'], client_cfg)
                     input_data[collect_kind] = prior_node_output['payload']
@@ -107,6 +112,7 @@ class ToolInterceptor:
                 input_data['inputs'] = []
                 seen_paths: set = set()
                 media_dir = Path(context.media_dir)
+                selected_media_paths = getattr(context, "selected_media_paths", None)
                 try:
                     project_media_root = Path(client_cfg.project.media_dir).resolve()
                 except Exception:
@@ -114,6 +120,8 @@ class ToolInterceptor:
                 for file_name in os.listdir(media_dir):
                     path = media_dir / file_name
                     if path.is_dir():
+                        continue
+                    if selected_media_paths is not None and str(path.resolve()) not in selected_media_paths:
                         continue
                     if inline_base64:
                         rel_path = str(path.relative_to(os.getcwd()))
@@ -175,9 +183,22 @@ class ToolInterceptor:
                     if is_skip_mode 
                     else meta_collector.id_to_require_prior_kind[node_id]
                 )
+                if node_id == "plan_timeline_pro" and request.args.get("is_montage", False):
+                    require_kind = ["generate_montage_video"]
+                if (
+                    node_id == "render_video"
+                    and getattr(context, "active_workflow", None)
+                    == "video-montage-workflow-skill"
+                ):
+                    require_kind = ["load_media", "plan_timeline"]
                 
                 # 2. Check if node is executable
-                collect_result = meta_collector.check_excutable(session_id, store, require_kind)
+                collect_result = meta_collector.check_excutable(
+                    session_id,
+                    store,
+                    require_kind,
+                    created_after=workflow_started_at,
+                )
                 load_collected_data(collect_result['collected_node'], input_data, store)
                 
                 # 3. Handle missing dependencies
@@ -271,9 +292,11 @@ class ToolInterceptor:
                         # Verify dependencies for this node
                         default_require = meta_collector.id_to_default_require_prior_kind[miss_id]
                         default_collect_result = meta_collector.check_excutable(
-                            session_id, store, default_require
+                            session_id,
+                            store,
+                            default_require,
+                            created_after=workflow_started_at,
                         )
-                        default_collect_result = meta_collector.check_excutable(session_id, store, default_require)
                         
                         # Recursively process dependencies
                         if default_collect_result['excutable']:
@@ -296,12 +319,14 @@ class ToolInterceptor:
                         
                         # Invoke the tool
                         try:
-                            output = await tool.arun(
-                                ToolCall(
-                                    args=tool_call_input, 
-                                    tool_call_type='default', 
-                                    runtime=runtime
+                            if tool.coroutine is None:
+                                raise ToolException(
+                                    f"Dependency node `{miss_id}` is not async"
                                 )
+                            output = await tool.coroutine(
+                                runtime=runtime,
+                                tool_call_type="default",
+                                args=tool_call_input,
                             )
                             logger.info(f"{indent}└─ ✓ `{miss_id}` completed successfully")
                             return output
@@ -313,7 +338,12 @@ class ToolInterceptor:
                     await execute_missing_dependencies(missing_kinds, for_node_id=node_id)
                     
                     # Collect dependencies again
-                    collect_result = meta_collector.check_excutable(session_id, store, require_kind)
+                    collect_result = meta_collector.check_excutable(
+                        session_id,
+                        store,
+                        require_kind,
+                        created_after=workflow_started_at,
+                    )
                     load_collected_data(collect_result['collected_node'], input_data, store)
             else:
                 input_data['artifacts_dir'] = store.artifacts_dir
@@ -346,8 +376,34 @@ class ToolInterceptor:
 
             
             result = tool_call_result.model_dump()
-            tool_result = json.loads(result['content'][0]['text'])
+            content = result.get('content') or []
+            raw_text = ""
+            if content and isinstance(content[0], dict):
+                raw_text = str(content[0].get('text') or "")
+            if result.get('isError'):
+                raise ToolException(raw_text or f"{request.name} failed without an error message")
+            try:
+                tool_result = json.loads(raw_text)
+            except json.JSONDecodeError as exc:
+                raise ToolException(
+                    f"{request.name} returned non-JSON MCP content: {raw_text[:500]!r}"
+                ) from exc
             node_id = request.name
+
+            if tool_result.get("isError"):
+                summary = tool_result.get("summary")
+                if isinstance(summary, dict):
+                    detail = next(
+                        (
+                            str(summary.get(key) or "").strip()
+                            for key in ("error_info", "ERROR", "error")
+                            if str(summary.get(key) or "").strip()
+                        ),
+                        "",
+                    )
+                else:
+                    detail = str(summary or "").strip()
+                raise ToolException(detail or f"{node_id} failed without error details")
             
             artifact_id = tool_result['artifact_id']
             session_id = client_ctx.session_id
@@ -467,10 +523,16 @@ class ToolInterceptor:
         before invoking AI transition tools.
         - ai_transition_config: {"provider": "dashscope", "dashscope": {...}, ...}
         """
+        tool_name = str(getattr(request, "name", "") or "")
+        tool_name_keyword = (
+            "generate_montage_video"
+            if "generate_montage_video" in tool_name
+            else "generate_ai_transition"
+        )
         return await ToolInterceptor._inject_provider_config(
             request,
             handler,
-            tool_name_keyword="generate_ai_transition",
+            tool_name_keyword=tool_name_keyword,
             context_attr="ai_transition_config",
             default_provider="dashscope",
         )

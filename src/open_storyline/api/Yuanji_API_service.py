@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import mimetypes
 import os
 import time
@@ -12,8 +13,8 @@ from typing import Any, Awaitable, Callable, List, Literal, Optional
 
 import requests
 from fastapi import BackgroundTasks, HTTPException, Request, UploadFile
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from langchain.tools import ToolRuntime
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from open_storyline.storage.agent_memory import ArtifactStore
 from open_storyline.usage_billing import read_usage_summary
@@ -25,14 +26,31 @@ UploadMediaService = Callable[
 ]
 UPLOAD_MEDIA_SERVICE_STATE_KEY = "auto_edit_upload_media_service"
 STALE_PROCESSING_GRACE_SECONDS = 10.0
+MONTAGE_WORKFLOW_SKILL = "video-montage-workflow-skill"
+MONTAGE_WORKFLOW_NODES = (
+    "load_media",
+    "split_shots",
+    "understand_clips",
+    "rewrite_montage_script",
+    "match_montage_segments",
+    "generate_montage_video",
+    "plan_timeline_pro",
+    "render_video",
+)
 
 EditStatus = Literal["idle", "processing", "completed", "failed"]
 
 
 class AutoEditRequest(BaseModel):
-    text: str = Field(..., min_length=1, description="用户想要实现的视频内容")
-    requirement: str = Field(..., min_length=1, description="具体剪辑要求")
-    media_ids: List[str] = Field(..., min_length=1, description="当前剪辑需要使用的素材 ID")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    script: str = Field(..., min_length=1, description="用于生成混剪视频的原始脚本")
+    media_id: str = Field(
+        ...,
+        alias="media_ID",
+        min_length=1,
+        description="当前混剪任务使用的已上传素材 ID",
+    )
 
 
 class SubmitEditResponse(BaseModel):
@@ -46,6 +64,41 @@ class EditResultResponse(BaseModel):
     billing: Optional[dict[str, Any]] = None
     upload_error: Optional[str] = None
     error: Optional[str] = None
+
+
+async def parse_auto_edit_request(request: Request) -> AutoEditRequest:
+    raw_body = await request.body()
+    if not raw_body.strip():
+        raise HTTPException(status_code=422, detail="request body cannot be empty")
+
+    try:
+        body_text = raw_body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="request body must be UTF-8 JSON") from exc
+
+    try:
+        data = json.loads(body_text)
+    except json.JSONDecodeError:
+        try:
+            # Some API clients paste multiline scripts directly into a JSON string.
+            data = json.loads(body_text, strict=False)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "type": "json_invalid",
+                    "message": exc.msg,
+                    "position": exc.pos,
+                },
+            ) from exc
+
+    try:
+        return AutoEditRequest.model_validate(data)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=exc.errors(include_url=False, include_input=False),
+        ) from exc
 
 
 def session_store(request: Request) -> Any:
@@ -165,43 +218,6 @@ def upload_result_video_sync(sess: Any, result_path: str) -> tuple[str, str, str
         return "", "", f"{type(exc).__name__}: {exc}"
 
 
-def merge_system_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
-    system_parts: List[str] = []
-    non_system: List[BaseMessage] = []
-
-    for msg in messages:
-        if isinstance(msg, SystemMessage):
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            system_parts.append(content)
-        else:
-            non_system.append(msg)
-
-    if not system_parts:
-        return non_system
-    return [SystemMessage(content="\n\n".join(system_parts)), *non_system]
-
-
-def should_route_to_add_subtitle_workflow(payload: AutoEditRequest) -> bool:
-    requirement = str(payload.requirement or "").strip().lower()
-    text = str(payload.text or "").strip().lower()
-    combined = f"{requirement}\n{text}"
-    keywords = (
-        "添加字幕",
-        "加字幕",
-        "加上字幕",
-        "生成字幕",
-        "自动字幕",
-        "字幕版",
-        "烧录字幕",
-        "字幕",
-        "subtitle",
-        "subtitles",
-        "caption",
-        "captions",
-    )
-    return any(keyword in combined for keyword in keywords)
-
-
 def billing_model_api_keys(cfg: Any) -> dict[str, str]:
     keys: dict[str, str] = {}
 
@@ -228,29 +244,73 @@ def billing_model_api_keys(cfg: Any) -> dict[str, str]:
     return keys
 
 
-def build_auto_edit_prompt(payload: AutoEditRequest) -> str:
-    media_list = "\n".join(f"- {media_id}" for media_id in payload.media_ids)
-    matched_workflow = ""
-    if should_route_to_add_subtitle_workflow(payload):
-        matched_workflow = (
-            "当前已预匹配到专项 WORKFLOW SKILL："
-            "`.storyline/skills/add_subtitle_workflow_skill/SKILL.md` 对应的 "
-            "`add_subtitle_workflow_skill`。\n"
-        )
-    return (
-        "【工作流路由规则】在调用任何剪辑 Node/tool 之前，必须先判断是否有可用的 "
-        "【WORKFLOW SKILL】适合当前任务。若有匹配的专项 WORKFLOW SKILL，第一步必须先调用该 skill，"
-        "然后严格按照该 skill 中定义的工具顺序执行；若没有任何专项 WORKFLOW SKILL 匹配，"
-        "第一步必须调用 `default_editing_workflow_skill`，再按默认工作流执行。"
-        "禁止在未调用 WORKFLOW SKILL 的情况下直接调用 `load_media`、`split_shots`、"
-        "`local_asr`、`render_video` 等剪辑 Node/tool。\n"
-        f"{matched_workflow}\n"
-        "当前请求来自自动剪辑 REST API。请不要停留在剪辑计划确认阶段，"
-        "请直接根据用户文案、剪辑要求和已上传素材完成自动剪辑，并在最终阶段调用 render_video 输出成片。\n\n"
-        f"用户文案：\n{payload.text}\n\n"
-        f"剪辑要求：\n{payload.requirement}\n\n"
-        f"本次任务使用的素材 ID：\n{media_list}"
+def montage_node_calls(payload: AutoEditRequest) -> list[tuple[str, dict[str, Any]]]:
+    node_args = {
+        "rewrite_montage_script": {"mode": "auto", "script": payload.script},
+        "plan_timeline_pro": {
+            "mode": "auto",
+            "is_montage": True,
+            "user_request": "",
+        },
+    }
+    return [
+        (node_id, node_args.get(node_id, {"mode": "auto"}))
+        for node_id in MONTAGE_WORKFLOW_NODES
+    ]
+
+
+async def invoke_montage_node(
+    sess: Any,
+    artifact_store: ArtifactStore,
+    node_id: str,
+    args: dict[str, Any],
+    *,
+    created_after: float,
+) -> dict[str, Any]:
+    node_manager = getattr(sess, "node_manager", None)
+    context = getattr(sess, "client_context", None)
+    if node_manager is None or context is None:
+        raise RuntimeError("montage workflow runtime is not initialized")
+
+    tool = node_manager.get_tool(node_id)
+    if tool is None:
+        raise RuntimeError(f"montage workflow node is unavailable: {node_id}")
+
+    tool_call_id = f"auto_edit_{node_id}_{uuid.uuid4().hex[:8]}"
+    runtime = ToolRuntime(
+        state={},
+        context=context,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id=tool_call_id,
+        store=artifact_store,
     )
+    try:
+        if tool.coroutine is None:
+            raise RuntimeError(f"montage workflow node `{node_id}` is not async")
+        await tool.coroutine(runtime=runtime, **args)
+    except Exception as exc:
+        raise RuntimeError(
+            f"{MONTAGE_WORKFLOW_SKILL} failed at node `{node_id}`: {exc}"
+        ) from exc
+
+    artifact_meta = artifact_store.get_latest_meta(
+        node_id=node_id,
+        session_id=sess.session_id,
+    )
+    if artifact_meta is None or artifact_meta.created_at < created_after:
+        raise RuntimeError(f"{node_id} did not produce a current workflow artifact")
+
+    _, artifact_data = artifact_store.load_result(artifact_meta.artifact_id)
+    if not isinstance(artifact_data, dict):
+        raise RuntimeError(f"{node_id} produced an invalid artifact")
+    output = artifact_data.get("payload")
+    if not isinstance(output, dict):
+        raise RuntimeError(f"{node_id} output must be an object")
+
+    node_kind = node_manager.id_to_kind.get(node_id, node_id)
+    context.workflow_outputs[node_kind] = output
+    return output
 
 
 def latest_render_output_path(sess: Any, *, created_after: Optional[float] = None) -> str:
@@ -348,71 +408,24 @@ async def run_auto_edit_task(store: Any, sess: Any, payload: AutoEditRequest) ->
 
             if getattr(sess, "client_context", None) is not None:
                 sess.client_context.lang = getattr(sess, "lang", "zh")
+                selected_path = Path(sess.load_media[payload.media_id].path).resolve()
+                sess.client_context.selected_media_paths = {str(selected_path)}
+                sess.client_context.active_workflow = MONTAGE_WORKFLOW_SKILL
+                sess.client_context.workflow_started_at = task_started_at
+                sess.client_context.workflow_outputs = {}
 
-            prompt = build_auto_edit_prompt(payload)
-            attachments = [
-                sess.public_media(sess.load_media[mid])
-                for mid in payload.media_ids
-                if mid in sess.load_media
-            ]
-            sess.history.append(
-                {
-                    "id": uuid.uuid4().hex[:12],
-                    "role": "user",
-                    "content": prompt,
-                    "attachments": attachments,
-                    "ts": time.time(),
-                }
+            artifact_store = ArtifactStore(
+                sess.cfg.project.outputs_dir,
+                session_id=sess.session_id,
             )
-
-            sanitize_messages = getattr(sess, "_sanitize_tool_protocol_in_lc_messages", None)
-            if sanitize_messages is not None:
-                sanitize_messages()
-
-            sess.lc_messages.append(HumanMessage(content=prompt))
-            await save_session_state(store, sess)
-
-            messages = list(getattr(sess, "lc_messages", []) or [])
-            messages.append(
-                SystemMessage(
-                    content=(
-                        "自动剪辑 API 模式：不要等待用户确认剪辑计划；"
-                        "直接分析需求、调用必要 MCP/Node，并生成最终视频。"
-                    )
+            for node_id, node_args in montage_node_calls(payload):
+                await invoke_montage_node(
+                    sess,
+                    artifact_store,
+                    node_id,
+                    node_args,
+                    created_after=task_started_at,
                 )
-            )
-            invoke_messages = merge_system_messages(messages)
-
-            result = await sess.agent.ainvoke(
-                {"messages": invoke_messages},
-                context=sess.client_context,
-            )
-
-            result_messages = []
-            if isinstance(result, dict):
-                maybe_messages = result.get("messages")
-                if isinstance(maybe_messages, list):
-                    result_messages = [m for m in maybe_messages if isinstance(m, BaseMessage)]
-
-            if len(result_messages) >= len(invoke_messages):
-                new_messages = result_messages[len(invoke_messages):]
-            else:
-                new_messages = result_messages
-            if new_messages:
-                sess.lc_messages.extend(new_messages)
-                for msg in reversed(new_messages):
-                    if isinstance(msg, AIMessage):
-                        content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                        if content.strip():
-                            sess.history.append(
-                                {
-                                    "id": uuid.uuid4().hex[:12],
-                                    "role": "assistant",
-                                    "content": content.strip(),
-                                    "ts": time.time(),
-                                }
-                            )
-                        break
 
             output_path = latest_render_output_path(sess, created_after=task_started_at)
             if not output_path:
@@ -427,6 +440,11 @@ async def run_auto_edit_task(store: Any, sess: Any, payload: AutoEditRequest) ->
             return
         set_edit_state(sess, status="failed", error=format_exception(exc))
     finally:
+        if getattr(sess, "client_context", None) is not None:
+            sess.client_context.selected_media_paths = None
+            sess.client_context.active_workflow = None
+            sess.client_context.workflow_started_at = None
+            sess.client_context.workflow_outputs = {}
         await save_session_state(store, sess)
 
 
@@ -460,9 +478,8 @@ async def submit_auto_edit_task(
     if get_edit_status(sess) == "processing" or sess.chat_lock.locked():
         raise HTTPException(status_code=409, detail="current edit task is still processing")
 
-    missing_media_ids = [media_id for media_id in payload.media_ids if media_id not in sess.load_media]
-    if missing_media_ids:
-        raise HTTPException(status_code=404, detail={"missing_media_ids": missing_media_ids})
+    if payload.media_id not in sess.load_media:
+        raise HTTPException(status_code=404, detail={"missing_media_ID": payload.media_id})
 
     set_edit_state(sess, status="processing")
     await save_session_state(store, sess)
@@ -529,4 +546,3 @@ async def get_auto_edit_result(session_id: str, request: Request) -> EditResultR
             error=str(getattr(sess, "auto_edit_error", "") or "auto edit failed"),
         )
     return EditResultResponse(status=status, billing=billing)
-

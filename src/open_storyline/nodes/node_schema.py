@@ -289,6 +289,128 @@ class GenerateScriptOutput(BaseModel):
     title: Optional[str]
 
 
+class MontageStoryboardSegment(BaseModel):
+    """A single executable storyboard segment for montage generation."""
+
+    segment_id: str = Field(
+        ...,
+        description="Stable segment identifier, e.g. segment_0001",
+    )
+    text: str = Field(..., description="Rewritten script text represented by this segment")
+    visual_intent: str = Field(..., description="Concrete visual content required for the segment")
+    duration: float = Field(..., gt=0, description="Suggested segment duration in seconds")
+    tone: str = Field(..., description="Emotional tone of the segment")
+    camera_motion: str = Field(..., description="Suggested camera framing and movement")
+    continuity_hint: str = Field(
+        ...,
+        description="Visual or action continuity guidance for adjacent segments",
+    )
+    source_type: Literal["uploaded", "generated"] = Field(
+        ...,
+        description="Whether this segment uses uploaded footage or requires AI video generation",
+    )
+    clip_ids: List[str] = Field(
+        default_factory=list,
+        description="Existing uploaded clip IDs selected for this segment",
+    )
+    generation_prompt: str = Field(
+        default="",
+        description="Video generation prompt; required when source_type is generated",
+    )
+
+
+class RewriteMontageScriptInput(BaseInput):
+    script: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=20000,
+            description="The user's source script. No style, duration, or editing requirements are needed.",
+        ),
+    ]
+
+
+class RewriteMontageScriptOutput(BaseModel):
+    original_script: str
+    rewritten_script: str
+    segments: List[MontageStoryboardSegment] = Field(default_factory=list)
+    total_duration: float = Field(default=0.0, ge=0, description="Sum of segment durations in seconds")
+
+
+class MatchMontageSegmentsInput(BaseInput):
+    """Match rewritten storyboard segments to analyzed uploaded clips."""
+
+
+class MatchedMontageSegment(BaseModel):
+    segment_id: str
+    text: str
+    visual_intent: str
+    duration: float = Field(..., gt=0)
+    tone: str
+    camera_motion: str
+    continuity_hint: str
+    source_type: Literal["uploaded", "generated", "mixed"]
+    media_ids: List[str] = Field(default_factory=list)
+    clip_ids: List[str] = Field(default_factory=list)
+    generation_prompt: str = ""
+    match_reason: str = ""
+
+
+class MatchMontageSegmentsOutput(BaseModel):
+    original_script: str
+    rewritten_script: str
+    segments: List[MatchedMontageSegment] = Field(default_factory=list)
+    total_duration: float = Field(default=0.0, ge=0)
+
+
+class GenerateMontageVideoInput(BaseInput):
+    duration: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            gt=0,
+            description=(
+                "Provider generation duration in seconds. If omitted, use the configured "
+                "provider default; generated clips can be trimmed on the timeline."
+            ),
+        ),
+    ] = None
+    resolution: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Video generation resolution; if omitted, use the provider default.",
+        ),
+    ] = None
+
+
+class MontageGeneratedClip(BaseModel):
+    clip_id: str
+    kind: Literal["video"] = "video"
+    path: str
+    fps: float
+    source_ref: Dict[str, Any]
+    segment_id: str
+    generation_prompt: str
+
+
+class MontageVideoGroup(BaseModel):
+    group_id: str
+    summary: str
+    clip_ids: List[str] = Field(default_factory=list)
+    duration: float = Field(..., gt=0)
+
+
+class GenerateMontageVideoOutput(BaseModel):
+    original_script: str
+    rewritten_script: str
+    segments: List[Dict[str, Any]] = Field(default_factory=list)
+    clips: List[Dict[str, Any]] = Field(default_factory=list)
+    generated_clips: List[MontageGeneratedClip] = Field(default_factory=list)
+    groups: List[MontageVideoGroup] = Field(default_factory=list)
+    total_duration: float = Field(default=0.0, ge=0)
+
+
 class GenerateVoiceoverInput(BaseInput):
     mode: Literal["auto", "skip", "default"] = Field(
         default="auto",
@@ -449,6 +571,8 @@ class PlanTimelineInput(BaseInput):
     use_beats: Annotated[bool, Field(default=True, description="Whether clip transitions should sync with BGM beats")]
     is_speech_rough_cut: Annotated[bool, Field(default=False, description="Whether the input clips are from speech rough cut, which affects the default timeline strategy selection")] 
     is_ai_transition: Annotated[bool, Field(default=False, description="Whether to build a minimal AI transition timeline by concatenating clips in order without subtitles, voiceover, cutting, or speed changes")]
+    is_montage: Annotated[bool, Field(default=False, description="Whether to build a video-only timeline from generate_montage_video output in rewritten storyboard order")]
+    user_request: Annotated[str, Field(default="", description="Optional special transition or continuity instructions for montage editing")]
     image_duration_ms: Annotated[int, Field(default=3000, description="Default duration for image clips in milliseconds when using the AI transition timeline branch")]
 
 class PlanTimelineAITransitionInput(BaseInput):
