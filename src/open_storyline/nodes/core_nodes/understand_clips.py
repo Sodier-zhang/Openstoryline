@@ -15,12 +15,12 @@ class UnderstandClipsNode(BaseNode):
     """
 
     meta = NodeMeta(
-        name="understand_clips",
-        description="Analyze clips and generate descriptions for each. Requires `load_media` and `split_shots` output",
-        node_id="understand_clips",
-        node_kind="understand_clips",
-        require_prior_kind=['load_media', 'split_shots'],
-        default_require_prior_kind=['load_media', 'split_shots'],
+        name="understand_media",
+        description="Analyze full uploaded media assets and generate descriptions for each. Requires `load_media` output",
+        node_id="understand_media",
+        node_kind="understand_media",
+        require_prior_kind=['load_media'],
+        default_require_prior_kind=['load_media'],
         next_available_node=['filter_clips', 'rewrite_montage_script'],
     )
 
@@ -31,22 +31,26 @@ class UnderstandClipsNode(BaseNode):
         node_state: NodeState,
         inputs: Dict[str, Any],
     ) -> Any:
-        clips = inputs["split_shots"]["clips"]
+        media_items = inputs.get("media_items", [])
 
-        clip_captions: list[dict[str, Any]] = []
-        for clip in clips or []:
-            clip_captions.append(
+        media_captions: list[dict[str, Any]] = []
+        for media_item in media_items or []:
+            media_id = str(media_item.get("media_id", "") or "").strip()
+            media_captions.append(
                 {
-                    "clip_id": clip.get("clip_id"),
+                    "media_id": media_id,
+                    "clip_id": media_id,
+                    "media_type": media_item.get("media_type"),
                     "caption": "no caption",
                     "source_ref": {
-                        "media_id": clip.get("source_ref", {}).get("media_id", ""),
-                    }
+                        "media_id": media_id,
+                    },
                 }
             )
-        node_state.node_summary.info_for_user(f"Skipped description generation for {len(clips)} clips")
+        node_state.node_summary.info_for_user(f"Skipped description generation for {len(media_items)} media assets")
         return {
-            "clip_captions": clip_captions,
+            "media_captions": media_captions,
+            "clip_captions": media_captions,
             "overall": "unknown",
         }
 
@@ -54,52 +58,41 @@ class UnderstandClipsNode(BaseNode):
         """
         inputs: Previous node results read by BaseNode.load_inputs(ctx)
         """
-        load_media = inputs["media"]
-        clips = inputs["split_shots"]["clips"]
+        media_items = inputs.get("media_items", [])
         llm = node_state.llm
-        system_prompt = get_prompt("understand_clips.system_detail", lang=node_state.lang)
-        user_prompt = get_prompt("understand_clips.user_detail", lang=node_state.lang)
+        system_prompt = get_prompt("understan_medias.system_detail", lang=node_state.lang)
+        user_prompt = get_prompt("understan_medias.user_detail", lang=node_state.lang)
 
 
-        clip_captions: list[dict[str, Any]] = []
+        media_captions: list[dict[str, Any]] = []
 
-        for clip in clips or []:
-            clip_id = str(clip.get("clip_id", "") or "").strip() or "(unknown_clip)"
-            kind = str(clip.get("kind", "") or "").strip().lower()
-            src = clip.get("source_ref") or {}
-
-            media_id = str(src.get("media_id", "") or "")
-            media_item = load_media.get(media_id)
+        for media_item in media_items or []:
+            media_id = str(media_item.get("media_id", "") or "").strip() or "(unknown_media)"
+            media_type = str(media_item.get("media_type", "") or "").strip().lower()
+            metadata = media_item.get("metadata") or {}
 
             out_item: dict[str, Any] = {
-                "clip_id": clip_id,
+                "media_id": media_id,
+                "clip_id": media_id,
+                "media_type": media_type,
             }
-            
-            if not media_item:
-                out_item["caption"] = f"Error: Media not found for media_id={media_id}"
-                clip_captions.append(out_item)
-                continue
 
             path = str(media_item.get("path", "") or "").strip()
             if not path:
                 out_item["caption"] = f"Error: No path specified for media_id={media_id}"
-                clip_captions.append(out_item)
+                media_captions.append(out_item)
                 continue
 
             # 组装 media
             media: list[Any] = []
 
-            if kind == "image":
+            if media_type == "image":
                 media = [{"path": path}]
 
-            elif kind == "video":
-                in_sec = _safe_float(src.get("start", 0) / 1000.0, 0.0)
-
-                if src.get("end") is not None:
-                    out_sec = _safe_float(src.get("end", 0) / 1000.0, in_sec)
-                else:
-                    dur = _safe_float(src.get("duration", 0.0), 0.0)
-                    out_sec = in_sec + max(0.0, dur)
+            elif media_type == "video":
+                in_sec = 0.0
+                duration_ms = _safe_float(metadata.get("duration"), 0.0)
+                out_sec = duration_ms / 1000.0 if duration_ms > 0 else 0.0
                 
                 if out_sec <= in_sec:
                     out_sec = in_sec + 0.1
@@ -109,9 +102,15 @@ class UnderstandClipsNode(BaseNode):
                     "in_sec": in_sec,
                     "out_sec": out_sec,
                 }]
+            elif media_type == "audio":
+                out_item["caption"] = "Audio media asset. Visual understanding is not available for audio-only input."
+                out_item["aes_score"] = -1.0
+                out_item["source_ref"] = _build_source_ref(media_id, metadata)
+                media_captions.append(out_item)
+                continue
             else:
-                out_item["caption"] = f"Error: Clip kind not supported: {kind}"
-                clip_captions.append(out_item)
+                out_item["caption"] = f"Error: Media type not supported: {media_type}"
+                media_captions.append(out_item)
                 continue
     
             max_retries = 2
@@ -142,15 +141,15 @@ class UnderstandClipsNode(BaseNode):
                 out_item["caption"] = "Error: VLM request failed"
                 out_item["aes_score"] = -1.0
                 node_state.node_summary.add_error(repr(last_exc))
-                clip_captions.append(out_item)
+                media_captions.append(out_item)
                 continue
 
             try:
                 obj = parse_json_dict(raw)
-            except:
+            except Exception:
                 text = (raw or "").strip()
                 out_item["caption"] = text if text else "Error: Unable to parse model output"
-                clip_captions.append(out_item)
+                media_captions.append(out_item)
                 continue
 
             out_item["caption"] = str(obj.get("caption", "") or "").strip()
@@ -160,20 +159,18 @@ class UnderstandClipsNode(BaseNode):
             except (ValueError, TypeError, AttributeError):
                 # If the conversion fails (such as "abc", None, "nan", etc.), assign the value -1.0
                 out_item["aes_score"] = -1.0
-            out_item["source_ref"] = {
-                "media_id": clip.get("source_ref", {}).get("media_id", ""),
-            }
-            clip_captions.append(out_item)
+            out_item["source_ref"] = _build_source_ref(media_id, metadata)
+            media_captions.append(out_item)
 
         desc_lines: list[str] = []
-        for desc in clip_captions:
+        for desc in media_captions:
             text = str(desc.get("caption"))
-            desc_lines.append(f"- {desc.get('clip_instance_id')}: {text}")
+            desc_lines.append(f"- {desc.get('media_id')}: {text}")
 
         overall_summary = ""
         if desc_lines:
-            overall_system_prompt = get_prompt("understand_clips.system_overall", lang=node_state.lang)
-            overall_user_prompt = get_prompt("understand_clips.user_overall", lang=node_state.lang, clips_captions=desc_lines)
+            overall_system_prompt = get_prompt("understan_medias.system_overall", lang=node_state.lang)
+            overall_user_prompt = get_prompt("understan_medias.user_overall", lang=node_state.lang, clips_captions=desc_lines)
 
             try:
                 overall_summary = await llm.complete(
@@ -188,23 +185,29 @@ class UnderstandClipsNode(BaseNode):
             
             except Exception as e:
                 overall_summary = f"Error: Summary generation failed: {type(e).__name__}: {e}"
-            node_state.node_summary.info_for_user(f"Clip understanding completed. Analyzed {len(clip_captions)} clips in total. Overall description: {overall_summary}")
+            node_state.node_summary.info_for_user(f"Media understanding completed. Analyzed {len(media_captions)} media assets in total. Overall description: {overall_summary}")
         return {
-            "clip_captions": clip_captions,
+            "media_captions": media_captions,
+            "clip_captions": media_captions,
             "overall": overall_summary
         }
     
 
     def _parse_input(self, node_state: NodeState, inputs: Dict[str, Any]):
-        media = inputs["load_media"]["media"]
-
-        load_media: dict[str, dict[str, Any]] = {}
-        for media_item in media or []:
-            media_id = media_item.get("media_id")
-            if media_id:
-                load_media[str(media_id)] = media_item
-        inputs.update({"media": load_media})
+        media = (inputs.get("load_media") or {}).get("media", [])
+        inputs.update({"media_items": media or []})
         return inputs
+
+def _build_source_ref(media_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    duration = _safe_float(metadata.get("duration"), 0.0)
+    return {
+        "media_id": media_id,
+        "start": 0,
+        "end": int(duration),
+        "duration": int(duration),
+        "height": metadata.get("height"),
+        "width": metadata.get("width"),
+    }
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:

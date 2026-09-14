@@ -40,7 +40,7 @@ description: 【WORKFLOW SKILL】根据用户输入脚本进行基础视频混�
 # Node 调用流程
 当前可执行主链固定为：
 
-`load_media → split_shots → understand_clips → rewrite_montage_script → match_montage_segments → generate_montage_video → plan_timeline_pro → render_video`
+`load_media → understand_media → rewrite_montage_script → match_montage_segments → generate_montage_video → plan_timeline_pro → render_video`
 
 按顺序逐个调用 Node。上一步成功后再调用下一步；如果返回 `isError=true`，停止后续调用并说明失败节点和原因。不要调用当前项目中不存在的 `plan_montage_continuity`。
 
@@ -49,40 +49,35 @@ description: 【WORKFLOW SKILL】根据用户输入脚本进行基础视频混�
 - 输入来自本次会话中用户上传的媒体；没有上传素材时也调用，使其产生空素材结果供依赖链继续执行。
 - 输出素材索引、路径、类型、尺寸和时长。
 
-## 2. `split_shots`
+## 2. `understand_media`
 - 固定调用，使用 `mode="auto"`。
-- 自动读取 `load_media` 的结果。视频按镜头切分，图片作为单个片段；没有素材时输出空片段列表。
-- 不要因为用户只上传图片或没有上传素材而跳过此 Node，后续 `generate_montage_video` 依赖它的输出。
-
-## 3. `understand_clips`
-- 固定调用，使用 `mode="auto"`。
-- 自动读取 `load_media` 和 `split_shots` 的结果，输出各片段的 `clip_id`、内容描述和美学信息。
+- 自动读取 `load_media` 的结果，输出素材的 `media_id`、内容描述和美学信息。
 - 没有素材时允许产生空理解结果，后续分镜将全部转为 AI 生成。
 
-## 4. `rewrite_montage_script`
+## 3. `rewrite_montage_script`
 - 固定调用，参数为 `mode="auto"` 和用户原始 `script`，不要附加风格、时长或剪辑要求。
-- 自动读取 `understand_clips`，在不改变脚本核心含义的前提下参考真实素材进行改写和分镜拆分。
+- 自动读取 `understand_media`，在不改变脚本核心含义的前提下参考真实素材进行改写和分镜拆分。
 - 输出 `rewritten_script` 及有序 `segments`。每段必须包含 `segment_id`、`text`、`visual_intent`、`duration`、`tone`、`camera_motion` 和 `continuity_hint`。
 
-## 5. `match_montage_segments`
+## 4. `match_montage_segments`
 - 固定调用，使用 `mode="auto"`，无需重复传入脚本或素材 ID。
-- 自动读取 `rewrite_montage_script` 和 `understand_clips`，按原分镜顺序输出匹配结果。
-- 每段 `source_type` 必须是 `uploaded`、`generated` 或 `mixed`。上传素材只能引用理解结果中真实存在的 `media_id`、`clip_id`；需要生成或补画面的分镜必须带 `generation_prompt`。
+- 自动读取 `rewrite_montage_script` 和 `understand_media`，按原分镜顺序输出匹配结果。
+- 每段 `source_type` 必须是 `uploaded`、`generated` 或 `mixed`。上传素材只能引用理解结果中真实存在的 `media_id`；需要生成或补画面的分镜必须带 `generation_prompt`。
 - 没有有效上传素材时，将全部分镜标记为 `generated`。
 
-## 6. `generate_montage_video`
+## 5. `generate_montage_video`
 - 固定调用，使用 `mode="auto"`；只有视频服务有明确限制时才传 `duration` 或 `resolution`。
-- 自动读取 `match_montage_segments` 和 `split_shots`。仅为 `generated`、`mixed` 分镜生成缺失画面，`uploaded` 分镜保留原素材。
+- 自动读取 `match_montage_segments` 和 `load_media`。仅为 `generated`、`mixed` 分镜生成缺失画面，`uploaded` 分镜保留原素材。
 - 输出按分镜顺序组织的统一 `segments`、`clips` 和 `groups`，供时间线直接使用。
 - 即使全部分镜都由上传素材覆盖也要调用；此时不生成新视频，只负责统一素材结构。
 
-## 7. `plan_timeline_pro`
+## 6. `plan_timeline_pro`
 - 固定调用，使用 `mode="auto"`、`is_montage=true`。
 - 自动读取 `generate_montage_video`，按照 `groups` 的分镜顺序编排上传片段和 AI 生成片段。
 - 默认 `user_request=""`；只有分镜明确要求 AI 转场或特殊衔接时，才把简洁、可执行的衔接要求写入 `user_request`。
 - 基础版本仅生成视频轨道，`subtitles`、`voiceover`、`bgm` 必须保持为空。
 
-## 8. `render_video`
+## 7. `render_video`
 - 固定调用，使用 `mode="auto"`。
 - 自动读取 `load_media` 和 `plan_timeline_pro` 的结果并渲染成片。渲染接口要求的 `transition_rec`、`text_rec` 依赖占位结果由系统自动补齐，不要在基础混剪主链中主动调用 `elementrec_transition`、`elementrec_text`，也不要据此新增效果或文字轨道。
 - 用户未指定画幅时不传 `aspect_ratio`，交给渲染节点根据素材自动判断；只有用户明确指定时才传入。

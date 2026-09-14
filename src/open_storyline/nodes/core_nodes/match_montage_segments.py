@@ -22,8 +22,8 @@ class MatchMontageSegmentsNode(BaseNode):
         ),
         node_id="match_montage_segments",
         node_kind="match_montage_segments",
-        require_prior_kind=["rewrite_montage_script", "understand_clips"],
-        default_require_prior_kind=["rewrite_montage_script", "understand_clips"],
+        require_prior_kind=["rewrite_montage_script", "understand_media"],
+        default_require_prior_kind=["rewrite_montage_script", "understand_media"],
         next_available_node=["generate_montage_video"],
     )
 
@@ -138,16 +138,20 @@ def _load_rewrite_result(inputs: Dict[str, Any]) -> tuple[dict[str, Any], list[d
 
 
 def _build_clip_lookup(inputs: Dict[str, Any]) -> dict[str, dict[str, Any]]:
-    understood = inputs.get("understand_clips") or {}
-    captions = (understood.get("clip_captions") or []) if isinstance(understood, dict) else []
+    understood = inputs.get("understand_media") or inputs.get("understand_clips") or {}
+    captions = (understood.get("media_captions") or understood.get("clip_captions") or []) if isinstance(understood, dict) else []
     lookup: dict[str, dict[str, Any]] = {}
 
     for item in captions if isinstance(captions, list) else []:
         if not isinstance(item, dict):
             continue
-        clip_id = str(item.get("clip_id") or "").strip()
+        clip_id = str(item.get("clip_id") or item.get("media_id") or "").strip()
         source_ref = item.get("source_ref") or {}
-        media_id = str(source_ref.get("media_id") or "").strip() if isinstance(source_ref, dict) else ""
+        media_id = str(
+            (source_ref.get("media_id") if isinstance(source_ref, dict) else "")
+            or item.get("media_id")
+            or ""
+        ).strip()
         caption = str(item.get("caption") or "").strip()
         if not clip_id or not media_id or not caption or caption.startswith("Error:"):
             continue
@@ -161,7 +165,7 @@ def _build_clip_lookup(inputs: Dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _load_uploaded_overall(inputs: Dict[str, Any]) -> str:
-    understood = inputs.get("understand_clips") or {}
+    understood = inputs.get("understand_media") or inputs.get("understand_clips") or {}
     if not isinstance(understood, dict):
         return ""
     overall = understood.get("overall") or ""

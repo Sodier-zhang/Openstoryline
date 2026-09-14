@@ -29,8 +29,8 @@ class GenerateMontageVideoNode(GenerateAITransitionNode):
         ),
         node_id="generate_montage_video",
         node_kind="generate_montage_video",
-        require_prior_kind=["match_montage_segments", "split_shots"],
-        default_require_prior_kind=["match_montage_segments", "split_shots"],
+        require_prior_kind=["match_montage_segments", "load_media"],
+        default_require_prior_kind=["match_montage_segments", "load_media"],
         next_available_node=["plan_timeline_pro"],
     )
 
@@ -176,9 +176,39 @@ def _load_match_result(inputs: Dict[str, Any]) -> tuple[dict[str, Any], list[dic
 
 
 def _build_original_clip_map(inputs: Dict[str, Any]) -> dict[str, dict[str, Any]]:
+    load_media_result = inputs.get("load_media") or {}
+    media_items = (load_media_result.get("media") or []) if isinstance(load_media_result, dict) else []
+    result: dict[str, dict[str, Any]] = {}
+
+    for media_item in media_items if isinstance(media_items, list) else []:
+        if not isinstance(media_item, dict):
+            continue
+        media_id = str(media_item.get("media_id") or "").strip()
+        media_type = str(media_item.get("media_type") or "").strip().lower()
+        path = str(media_item.get("path") or "").strip()
+        if not media_id or not path or media_type == "audio":
+            continue
+        metadata = media_item.get("metadata") or {}
+        duration = int(float(metadata.get("duration") or 0))
+        result[media_id] = {
+            "clip_id": media_id,
+            "kind": "image" if media_type == "image" else "video",
+            "path": path,
+            "fps": metadata.get("fps"),
+            "source_ref": {
+                "media_id": media_id,
+                "start": 0,
+                "end": duration,
+                "duration": duration,
+                "width": metadata.get("width"),
+                "height": metadata.get("height"),
+            },
+        }
+    if result:
+        return result
+
     split_result = inputs.get("split_shots") or {}
     clips = (split_result.get("clips") or []) if isinstance(split_result, dict) else []
-    result: dict[str, dict[str, Any]] = {}
     for clip in clips if isinstance(clips, list) else []:
         if not isinstance(clip, dict):
             continue
@@ -196,7 +226,7 @@ def _segment_uploaded_clips(
     missing = [clip_id for clip_id in clip_ids if clip_id not in original_clips]
     if missing:
         raise ValueError(
-            f"{segment['segment_id']} references clips missing from split_shots: {missing}"
+            f"{segment['segment_id']} references uploaded media missing from load_media: {missing}"
         )
     return [original_clips[clip_id] for clip_id in clip_ids]
 

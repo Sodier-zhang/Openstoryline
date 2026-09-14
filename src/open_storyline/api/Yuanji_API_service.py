@@ -28,8 +28,7 @@ STALE_PROCESSING_GRACE_SECONDS = 10.0
 MONTAGE_WORKFLOW_SKILL = "video-montage-workflow-skill"
 MONTAGE_WORKFLOW_NODES = (
     "load_media",
-    "split_shots",
-    "understand_clips",
+    "understand_media",
     "rewrite_montage_script",
     "match_montage_segments",
     "generate_montage_video",

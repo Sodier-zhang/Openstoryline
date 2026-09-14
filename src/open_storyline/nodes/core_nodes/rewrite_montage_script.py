@@ -22,7 +22,7 @@ class RewriteMontageScriptNode(BaseNode):
         ),
         node_id="rewrite_montage_script",
         node_kind="rewrite_montage_script",
-        require_prior_kind=["understand_clips"],
+        require_prior_kind=["understand_media"],
         default_require_prior_kind=[],
         next_available_node=["match_montage_segments"],
     )
@@ -101,35 +101,35 @@ def _require_script(inputs: Dict[str, Any]) -> str:
 
 
 def _load_material_context(inputs: Dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
-    understood = inputs.get("understand_clips") or {}
-    clip_captions = understood.get("clip_captions") or []
-    if not isinstance(clip_captions, list):
-        clip_captions = []
-    clip_captions = [item for item in clip_captions if isinstance(item, dict)]
+    understood = inputs.get("understand_media") or inputs.get("understand_clips") or {}
+    media_captions = understood.get("media_captions") or understood.get("clip_captions") or []
+    if not isinstance(media_captions, list):
+        media_captions = []
+    media_captions = [item for item in media_captions if isinstance(item, dict)]
 
     overall = understood.get("overall") or ""
     if not isinstance(overall, str):
         overall = str(overall)
-    return clip_captions, overall.strip()
+    return media_captions, overall.strip()
 
 
 def _build_material_block(clip_captions: list[dict[str, Any]], lang: str) -> str:
     no_material_message = (
-        "没有可用的上传视频片段，所有分镜都必须使用 AI 生成视频。"
+        "没有可用的上传素材，所有分镜都必须使用 AI 生成视频。"
         if lang == "zh"
-        else "No uploaded video clips are available. All storyboard segments must use generated video."
+        else "No uploaded media assets are available. All storyboard segments must use generated video."
     )
     if not clip_captions:
         return no_material_message
 
     lines: list[str] = []
     for item in clip_captions:
-        clip_id = str(item.get("clip_id") or "").strip()
+        clip_id = str(item.get("clip_id") or item.get("media_id") or "").strip()
         if not clip_id:
             continue
         caption = str(item.get("caption") or "").strip()[:300]
         aes_score = item.get("aes_score")
-        line = f"- clip_id={clip_id}; caption={caption or 'unknown'}"
+        line = f"- clip_id={clip_id}; media_id={clip_id}; caption={caption or 'unknown'}"
         if aes_score is not None:
             line += f"; aes_score={aes_score}"
         lines.append(line)
