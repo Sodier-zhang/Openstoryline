@@ -587,3 +587,7 @@ class GenerateAITransitionNode(BaseNode):
         )
         
         return gen_video_path, response, effective_duration
+
+    def _record_model_request(self, **_: Any) -> None:
+        """Compatibility no-op for old workflow code paths after billing removal."""
+        return None

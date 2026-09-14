@@ -31,7 +31,7 @@ class GenerateMontageVideoNode(GenerateAITransitionNode):
         node_kind="generate_montage_video",
         require_prior_kind=["match_montage_segments", "split_shots"],
         default_require_prior_kind=["match_montage_segments", "split_shots"],
-        next_available_node=["plan_montage_continuity", "plan_timeline_pro"],
+        next_available_node=["plan_timeline_pro"],
     )
 
     input_schema = GenerateMontageVideoInput
@@ -99,7 +99,7 @@ class GenerateMontageVideoNode(GenerateAITransitionNode):
             prompt = _build_continuous_prompt(segments, segment_index)
             requested_duration = inputs.get("duration")
             resolution = inputs.get("resolution")
-            generated_path, response, effective_duration = self._generate_video(
+            generated_path, _response, effective_duration = self._generate_video(
                 provider=runtime_cfg["provider"],
                 api_key=runtime_cfg["api_key"],
                 model_name=runtime_cfg["model_name"],
@@ -117,11 +117,6 @@ class GenerateMontageVideoNode(GenerateAITransitionNode):
                     self.server_cache_dir,
                     node_state.session_id,
                 ),
-            )
-            self._record_model_request(
-                node_state=node_state,
-                model_name=runtime_cfg["model_name"],
-                response=response,
             )
 
             clip_id = f"montage_generated_{target_index:04d}"

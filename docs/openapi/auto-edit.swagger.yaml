@@ -11,10 +11,8 @@ info:
     注意：本文档用于接口交互设计与调试说明，不修改项目现有服务逻辑。
 
 servers:
-  - url: http://localhost:7860
-    description: Local development server
-  - url: http://127.0.0.1:7860
-    description: Local development server by IP
+  - url: http://192.168.31.177:7860
+    description: LAN development server
 
 tags:
   - name: Sessions
