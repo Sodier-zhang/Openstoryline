@@ -18,7 +18,6 @@ from open_storyline.nodes.node_manager import NodeManager
 from open_storyline.mcp.hooks.chat_middleware import handle_tool_errors, on_progress, log_tool_request
 from open_storyline.mcp.sampling_handler import make_sampling_callback
 from open_storyline.skills.skills_io import load_skills
-from open_storyline.usage_billing import append_usage_record
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ async def validate_api_key(base_url: str, api_key: str, model: str, provider: st
         "Content-Type": "application/json",
     }
     
-    # Minimal request body for validation (using max_tokens=1 for minimal cost)
+    # Minimal request body for validation.
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
@@ -234,17 +233,9 @@ async def build_agent(
         max_retries=vlm_max_retries,
     )
 
-    def _record_llm_request(record: dict[str, Any]) -> None:
-        try:
-            append_usage_record(cfg.project.outputs_dir, session_id, record)
-        except Exception as e:
-            logger.warning("failed to record llm request metadata: %s", e)
-
     sampling_callback = make_sampling_callback(
         llm,
         vlm,
-        billing_cfg=getattr(cfg, "billing", None),
-        usage_recorder=_record_llm_request,
     )
 
     connections = {

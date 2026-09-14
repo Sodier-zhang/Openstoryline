@@ -26,41 +26,6 @@ timeout = 20.0 # 单位：秒
 temperature = 0.1
 max_retries = 2
 
-# ============= 大模型真实账单 / LLM Actual Billing ======================
-# 只展示服务商真实账单消费，不使用 token 估算费用。
-# Only show actual provider billing, never token-based estimates.
-[billing]
-enabled = true
-currency = "USD"
-provider = ""
-timeout = 30.0
-method = "GET"
-auth_header = "Authorization"
-auth_scheme = "Bearer"
-session_param = "session_id"
-model_param = "model"
-start_param = "start_time"
-end_param = "end_time"
-request_ids_param = "request_ids"
-time_format = "unix"
-records_path = "records"
-amount_field = "amount"
-currency_field = "currency"
-request_id_field = "request_id"
-total_cost_field = "total_cost"
-
-[billing.per_call_costs.deepseek-v4-flash]
-amount = 0.0
-currency = "USD"
-
-[billing.per_call_costs.qwen3-vl-plus]
-amount = 0.0
-currency = "USD"
-
-[billing.per_call_costs."wan2.2-kf2v-flash"]
-amount = 0.0
-currency = "USD"
-
 # ============= MCP Server 相关 / MCP Server Related =============
 [local_mcp_server]
 server_name = "storyline"
@@ -110,6 +75,27 @@ tokens_per_clip = 48             # 每个 clip 额外 token 预算 / Extra outpu
 max_tokens_cap = 16384           # token 预算上限 / Upper bound of output token budget
 retry_token_step = 2048          # 每次重试增加的 token 预算 / Token increase per retry
 max_parse_retries = 2            # JSON 解析失败时重试次数 / Retry count when JSON parsing fails
+
+# ============= ASR 语音识别 / Speech Recognition ===================
+[asr]
+# doubao_asr: 豆包录音文件识别
+default_provider = "doubao_asr"
+
+[asr.providers.doubao_asr]
+submit_url = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"
+query_url = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"
+api_key = "7396a03d-2972-4abf-828d-9fabd45c9ab6"                     # 新版控制台填写 X-Api-Key / Fill X-Api-Key here
+resource_id = "volc.seedasr.auc" # 豆包录音文件识别模型2.0 / Seed ASR 2.0
+model_name = "bigmodel"
+uid = "openstoryline"
+language = "zh-CN"                    # 留空自动识别中英文和方言；可填 zh-CN/en-US 等 / Optional language
+public_base_url = "https://tbai.work"                                      # 必填：公网可访问 outputs 目录的 URL 前缀，例如 https://example.com/outputs
+poll_interval = 2.0
+timeout = 600.0
+enable_itn = true
+enable_punc = true
+enable_ddc = false
+show_utterances = true
 
 # ============= 文案模板 / Script Templates =============
 [script_template]

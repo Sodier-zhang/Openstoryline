@@ -3,7 +3,7 @@ import os
 import math
 import base64
 from io import BytesIO
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
 
 from PIL import Image
@@ -11,9 +11,6 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from mcp.types import CreateMessageRequestParams, CreateMessageResult, TextContent
-
-from open_storyline.usage_billing import per_call_billing_record
-
 
 # -----------------------------
 # Configurable parameters: Control multimodal input size
@@ -168,29 +165,6 @@ def _extract_text_from_lc_response(resp: Any) -> str:
     return str(resp).strip()
 
 
-def _extract_provider_request_id(resp: Any) -> str:
-    for attr in ("id", "request_id"):
-        value = getattr(resp, attr, None)
-        if value:
-            return str(value)
-
-    metadata = getattr(resp, "response_metadata", None)
-    if isinstance(metadata, dict):
-        for key in ("request_id", "id", "x-request-id", "x-dashscope-request-id", "x-requestid"):
-            value = metadata.get(key)
-            if value:
-                return str(value)
-
-        headers = metadata.get("headers") or metadata.get("response_headers")
-        if isinstance(headers, dict):
-            for key in ("x-request-id", "x-dashscope-request-id", "x-requestid"):
-                value = headers.get(key) or headers.get(key.upper()) or headers.get(key.title())
-                if value:
-                    return str(value)
-
-    return ""
-
-
 def _normalize_media_items(media_inputs: List[Any]) -> List[Dict[str, Any]]:
     """
     Supports three input formats:
@@ -334,8 +308,6 @@ def make_sampling_callback(
     llm,
     vlm,
     *,
-    billing_cfg: Any = None,
-    usage_recorder: Callable[[Dict[str, Any]], None] | None = None,
     resize_edge: int = DEFAULT_RESIZE_EDGE,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     min_frames: int = DEFAULT_MIN_FRAMES,
@@ -349,8 +321,6 @@ def make_sampling_callback(
     - Samples frames and constructs LangChain multimodal messages
     - Selects llm/vlm based on presence of media input
     """
-    _ = billing_cfg
-
     async def sampling_callback(context, params: CreateMessageRequestParams) -> CreateMessageResult:
         try:
             # 1. System prompt
@@ -442,29 +412,6 @@ def make_sampling_callback(
                     resp = await asyncio.to_thread(bound2.invoke, lc_messages)
 
             text_out = _extract_text_from_lc_response(resp)
-            # Billing display must come from a real provider billing source.
-            # Model responses may include token usage, but that is not an invoice
-            # and must not be recorded as task billing consumption here.
-            if usage_recorder is not None and bool(getattr(billing_cfg, "enabled", True)):
-                request_id = _extract_provider_request_id(resp)
-                billing_context = {
-                    "request_id": request_id,
-                    "node_id": metadata.get("node_id") or "",
-                    "node_name": metadata.get("node_name") or "",
-                    "node_kind": metadata.get("node_kind") or "",
-                    "artifact_id": metadata.get("artifact_id") or "",
-                    "model": str(model_name),
-                    "modality": "multimodal" if use_multimodal else "text",
-                }
-                if request_id:
-                    usage_recorder({"source": "llm_request", **billing_context})
-                billing_record = per_call_billing_record(
-                    billing_cfg=billing_cfg,
-                    **billing_context,
-                )
-                if billing_record:
-                    usage_recorder(billing_record)
-            
             return CreateMessageResult(
                 content=TextContent(type="text", text=text_out),
                 model=str(model_name),

@@ -17,7 +17,6 @@ from langchain.tools import ToolRuntime
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from open_storyline.storage.agent_memory import ArtifactStore
-from open_storyline.usage_billing import read_usage_summary
 
 
 UploadMediaService = Callable[
@@ -61,7 +60,6 @@ class EditResultResponse(BaseModel):
     status: EditStatus
     media_id: Optional[str] = None
     video_url: Optional[str] = None
-    billing: Optional[dict[str, Any]] = None
     upload_error: Optional[str] = None
     error: Optional[str] = None
 
@@ -216,32 +214,6 @@ def upload_result_video_sync(sess: Any, result_path: str) -> tuple[str, str, str
         return remote_media_id, public_url, ""
     except Exception as exc:
         return "", "", f"{type(exc).__name__}: {exc}"
-
-
-def billing_model_api_keys(cfg: Any) -> dict[str, str]:
-    keys: dict[str, str] = {}
-
-    llm_model = str(getattr(getattr(cfg, "llm", None), "model", "") or "").strip()
-    llm_key = str(getattr(getattr(cfg, "llm", None), "api_key", "") or "").strip()
-    if llm_model and llm_key:
-        keys[llm_model] = llm_key
-
-    vlm_model = str(getattr(getattr(cfg, "vlm", None), "model", "") or "").strip()
-    vlm_key = str(getattr(getattr(cfg, "vlm", None), "api_key", "") or "").strip()
-    if vlm_model and vlm_key:
-        keys[vlm_model] = vlm_key
-
-    ai_transition = getattr(cfg, "generate_ai_transition", None)
-    providers = getattr(ai_transition, "providers", None) or {}
-    for provider_cfg in providers.values():
-        if not isinstance(provider_cfg, dict):
-            continue
-        model = str(provider_cfg.get("model_name") or provider_cfg.get("model") or "").strip()
-        api_key = str(provider_cfg.get("api_key") or "").strip()
-        if model and api_key:
-            keys[model] = api_key
-
-    return keys
 
 
 def montage_node_calls(payload: AutoEditRequest) -> list[tuple[str, dict[str, Any]]]:
@@ -501,21 +473,6 @@ async def get_auto_edit_result(session_id: str, request: Request) -> EditResultR
             await complete_with_render_output(store, sess, output_path)
             status = get_edit_status(sess)
 
-    billing_end_at = float(getattr(sess, "auto_edit_updated_at", 0.0) or 0.0)
-    if status == "processing":
-        billing_end_at = time.time()
-    billing = read_usage_summary(
-        sess.cfg.project.outputs_dir,
-        session_id,
-        currency=str(getattr(sess.cfg.billing, "currency", "USD") or "USD"),
-        billing_cfg=getattr(sess.cfg, "billing", None),
-        model_api_keys=billing_model_api_keys(sess.cfg),
-        started_at=float(getattr(sess, "auto_edit_started_at", 0.0) or 0.0),
-        ended_at=billing_end_at,
-    )
-    sess.auto_edit_billing = billing
-    await save_session_state(store, sess)
-
     if status == "completed":
         result_path = str(getattr(sess, "auto_edit_result_path", "") or "")
         public_video_url = str(getattr(sess, "auto_edit_public_video_url", "") or "")
@@ -536,13 +493,11 @@ async def get_auto_edit_result(session_id: str, request: Request) -> EditResultR
             status=status,
             media_id=remote_media_id or (result_media_id(result_path) if result_path else None),
             video_url=public_video_url or None,
-            billing=billing,
             upload_error=upload_error or None,
         )
     if status == "failed":
         return EditResultResponse(
             status=status,
-            billing=billing,
             error=str(getattr(sess, "auto_edit_error", "") or "auto edit failed"),
         )
-    return EditResultResponse(status=status, billing=billing)
+    return EditResultResponse(status=status)

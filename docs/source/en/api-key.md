@@ -63,8 +63,6 @@ For more details, please refer to the documentation: https://bailian.console.ali
 
 Model List: https://help.aliyun.com/zh/model-studio/models
 
-Billing Dashboard: https://billing-cost.console.aliyun.com/home
-
 ## 3. Pexels Image and Video Download API Key Configuration
 
 1. Open the Pexels website, register an account, and apply for an API key at https://www.pexels.com/api/
@@ -138,7 +136,7 @@ For detailed documentation, please refer to: https://www.volcengine.com/docs/656
 
 **Output quality note**: The current transition description is generated from the first and last frames of adjacent clips by a vision model, while clip ordering is determined by the language model. Final results can therefore vary depending on frame content, prompts, model versions, and service-side behavior. Some randomness is expected, and output may not match expectations every time.
 
-**Recommendation**: Start with a small test run, review the results, and then scale up if the quality and cost are acceptable. Please also check your **account balance** and **provider billing rules** in advance.
+**Recommendation**: Start with a small test run, review the results, and then scale up after the quality is acceptable.
 
 ### Option 1: MiniMax Hailuo
 
@@ -155,5 +153,3 @@ For detailed documentation, please refer to: https://www.volcengine.com/docs/656
 ## Important Notes
 
 - All API Keys must be kept secure to avoid leakage
-- Ensure sufficient account balance before use
-- Regularly monitor API usage and costs

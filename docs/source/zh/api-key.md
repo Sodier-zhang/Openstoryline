@@ -63,8 +63,6 @@ Qwen3-Omni同样可以在阿里云百炼平台进行申请，具体参数如下�
 
 阿里云模型列表：https://help.aliyun.com/zh/model-studio/models
 
-计费看板：https://billing-cost.console.aliyun.com/home
-
 ## 三、Pexels 图像和视频下载API密钥配置
 
 1. 打开Pexels网站，注册账号，申请API https://www.pexels.com/zh-cn/api/key/ 
@@ -134,7 +132,7 @@ Qwen3-Omni同样可以在阿里云百炼平台进行申请，具体参数如下�
 
 **效果说明**：当前转场描述由视觉模型基于片段首尾帧自动生成，片段衔接顺序由语言模型综合判断，因此最终效果受首尾帧内容、提示词、模型版本和服务波动影响，存在一定随机性，不保证每次都完全符合预期。
 
-**使用建议**：建议先使用少量片段试跑，确认效果与成本后再批量生成，并提前关注**账户余额**与**计费规则**。
+**使用建议**：建议先使用少量片段试跑，确认效果后再批量生成。
 
 ### 方案一：Minimax 海螺
 1. Minimax 的 LLM / TTS 服务的API key 通常同样适用于海螺视频生成服务。如果你已申请过，可直接使用；如果你还没有申请过，可以前往<a href="https://platform.minimaxi.com/user-center/basic-information" target="_blank">用户中心</a>申请。
@@ -149,5 +147,3 @@ Qwen3-Omni同样可以在阿里云百炼平台进行申请，具体参数如下�
 ## 注意事项
 
 - 所有 API Key 均需妥善保管，避免泄露
-- 使用前请确认账户余额充足
-- 建议定期检查 API 调用量和费用

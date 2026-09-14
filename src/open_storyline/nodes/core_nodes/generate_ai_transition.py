@@ -13,7 +13,6 @@ from open_storyline.utils.ai_transition_client import VisionClientFactory
 from open_storyline.nodes.core_nodes.base_node import BaseNode, NodeMeta
 from open_storyline.nodes.node_state import NodeState
 from open_storyline.nodes.node_schema import GenerateAITransitionInput
-from open_storyline.usage_billing import append_usage_record, per_call_billing_record
 
 def encode_image_to_data_url(
     image: Image.Image,
@@ -335,12 +334,6 @@ class GenerateAITransitionNode(BaseNode):
             output_dir=node_cache_dir,
             cancel_checker=lambda: is_ai_transition_cancelled(self.server_cache_dir, node_state.session_id),
         )
-        self._record_model_request(
-            node_state=node_state,
-            model_name=model_name,
-            response=response,
-        )
-
         with VideoFileClip(str(gen_video_path)) as generated_clip:
             fps = float(generated_clip.fps or 0)
             width, height = map(int, generated_clip.size)
@@ -594,55 +587,3 @@ class GenerateAITransitionNode(BaseNode):
         )
         
         return gen_video_path, response, effective_duration
-
-    def _record_model_request(
-        self,
-        *,
-        node_state: NodeState,
-        model_name: str,
-        response: Dict[str, Any],
-    ) -> None:
-        request_id = self._extract_request_id(response)
-        billing_context = {
-            "request_id": request_id,
-            "node_id": self.meta.node_id,
-            "node_name": self.meta.name,
-            "node_kind": self.meta.node_kind,
-            "artifact_id": node_state.artifact_id,
-            "model": str(model_name),
-            "modality": "video",
-        }
-        try:
-            if request_id:
-                append_usage_record(
-                    self.server_cfg.project.outputs_dir,
-                    node_state.session_id,
-                    {"source": "model_request", **billing_context},
-                )
-
-            billing_record = per_call_billing_record(
-                billing_cfg=getattr(self.server_cfg, "billing", None),
-                **billing_context,
-            )
-            if billing_record:
-                append_usage_record(
-                    self.server_cfg.project.outputs_dir,
-                    node_state.session_id,
-                    billing_record,
-                )
-        except Exception:
-            pass
-
-    def _extract_request_id(self, response: Dict[str, Any]) -> str:
-        if not isinstance(response, dict):
-            return ""
-        candidates = (
-            response.get("task_id"),
-            response.get("request_id"),
-            response.get("id"),
-            (response.get("output") or {}).get("task_id") if isinstance(response.get("output"), dict) else None,
-        )
-        for value in candidates:
-            if value:
-                return str(value)
-        return ""

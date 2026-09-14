@@ -58,7 +58,7 @@
 * **2026-02-10**: FireRed-OpenStoryline was officially open-sourced.
 
 > <sub>
-> ⚠️ Note: AI transitions rely on third-party AIGC video generation services, and <b>the cost is relatively high</b>. Due to variations in source material quality, prompts, and model performance, the generated results are somewhat unpredictable. It is recommended to enable this feature only when needed.
+> ⚠️ Note: AI transitions rely on third-party AIGC video generation services and may take longer than regular copywriting or voiceover workflows. Due to variations in source material quality, prompts, and model performance, the generated results are somewhat unpredictable. It is recommended to enable this feature only when needed.
 > </sub>
 
 ## 🏗️ Architecture
