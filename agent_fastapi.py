@@ -57,7 +57,13 @@ from open_storyline.config import load_settings, default_config_path
 from open_storyline.config import Settings
 from open_storyline.storage.agent_memory import ArtifactStore
 from open_storyline.mcp.hooks.node_interceptors import ToolInterceptor
-from open_storyline.mcp.hooks.chat_middleware import set_mcp_log_sink, reset_mcp_log_sink
+from open_storyline.mcp.hooks.chat_middleware import (
+    record_llm_token_usage_from_response,
+    reset_llm_token_usage_recorder,
+    reset_mcp_log_sink,
+    set_llm_token_usage_recorder,
+    set_mcp_log_sink,
+)
 from open_storyline.api.Yuanji_API_router import register_auto_edit_routes
 
 WEB_DIR = os.path.join(ROOT_DIR, "web")
@@ -1311,6 +1317,7 @@ class ChatSession:
             SystemMessage(content=UPLOAD_STATUS_SYSTEM_EMPTY),
         ]
         self.history: List[Dict[str, Any]] = []
+        self.llm_token_usage: List[Dict[str, Any]] = []
 
         self.load_media: Dict[str, MediaMeta] = {}
         self.pending_media_ids: List[str] = []
@@ -1347,6 +1354,16 @@ class ChatSession:
         self.auto_edit_error: str = ""
         self.auto_edit_started_at: float = 0.0
         self.auto_edit_updated_at: float = 0.0
+
+    def record_llm_token_usage(self, record: Dict[str, Any]) -> None:
+        self.llm_token_usage.append({
+            "model": str(record.get("model") or ""),
+            "input_tokens": record.get("input_tokens"),
+            "output_tokens": record.get("output_tokens"),
+            "total_tokens": record.get("total_tokens"),
+            "node_id": str(record.get("node_id") or ""),
+            "timestamp": float(record.get("timestamp") or time.time()),
+        })
 
     @classmethod
     def state_file_path_for(cls, session_id: str, cfg: Settings) -> str:
@@ -1579,6 +1596,7 @@ class ChatSession:
             "session_id": self.session_id,
             "lang": self.lang,
             "history": self._persist_history(),
+            "llm_token_usage": _to_json_safe(self.llm_token_usage),
             "chat_model_key": self.chat_model_key,
             "vlm_model_key": self.vlm_model_key,
             "load_media": self._serialize_load_media(),
@@ -1743,6 +1761,8 @@ class ChatSession:
             sess.lang = "zh"
 
         sess.history = list(data.get("history") or [])
+        usage_raw = data.get("llm_token_usage") or []
+        sess.llm_token_usage = usage_raw if isinstance(usage_raw, list) else []
         sess.chat_model_key = str(data.get("chat_model_key") or sess.chat_model_key)
         sess.vlm_model_key = str(data.get("vlm_model_key") or sess.vlm_model_key)
         try:
@@ -2091,6 +2111,7 @@ class ChatSession:
             "developer_mode": self.developer_mode,
             "pending_media": self.public_pending_media(),
             "history": self.history,
+            "llm_token_usage": self.llm_token_usage,
             "turn_running": self.chat_lock.locked(),
             "restore_degraded": bool(getattr(self, "restore_degraded", False)),
             "restore_degraded_reason": str(getattr(self, "restore_degraded_reason", "") or ""),
@@ -3062,11 +3083,13 @@ async def ws_send(ws: WebSocket, type_: str, data: Any = None):
         return False
 
 @asynccontextmanager
-async def mcp_sink_context(sink_func):
+async def mcp_sink_context(sink_func, token_usage_recorder=None):
     token = set_mcp_log_sink(sink_func)
+    usage_token = set_llm_token_usage_recorder(token_usage_recorder)
     try:
         yield
     finally:
+        reset_llm_token_usage_recorder(usage_token)
         reset_mcp_log_sink(token)
 
 
@@ -3321,6 +3344,24 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                 loop.call_soon_threadsafe(out_q.put_nowait, ("mcp", ev))
 
                         new_messages: List[BaseMessage] = []
+                        seen_token_usage_messages: set[int] = set()
+
+                        def record_token_usage_from_messages(msgs: List[BaseMessage]) -> None:
+                            for msg in msgs or []:
+                                if not isinstance(msg, AIMessage):
+                                    continue
+                                marker = id(msg)
+                                if marker in seen_token_usage_messages:
+                                    continue
+                                seen_token_usage_messages.add(marker)
+                                model_name = (
+                                    getattr(msg, "response_metadata", {}) or {}
+                                ).get("model_name") or sess.chat_model_key
+                                record_llm_token_usage_from_response(
+                                    msg,
+                                    model=str(model_name),
+                                    node_id="agent",
+                                )
 
                         # Guard first: sanitize protocol on sess.lc_messages before we build
                         # the merged request list for astream.
@@ -3362,6 +3403,7 @@ async def ws_chat(ws: WebSocket, session_id: str):
                                         if isinstance(chunk, dict):
                                             for _step, data in chunk.items():
                                                 msgs = (data or {}).get("messages") or []
+                                                record_token_usage_from_messages(msgs)
                                                 new_messages.extend(msgs)
 
                                 await out_q.put(("agent.done", None))
@@ -3594,7 +3636,7 @@ async def ws_chat(ws: WebSocket, session_id: str):
                         was_interrupted = False  # 本 turn 是否已经走了“打断收尾”
 
                         try:
-                            async with mcp_sink_context(sink):
+                            async with mcp_sink_context(sink, sess.record_llm_token_usage):
                                 pump_task = asyncio.create_task(pump_agent())
                                 cancel_wait_task = asyncio.create_task(sess.cancel_event.wait())
 

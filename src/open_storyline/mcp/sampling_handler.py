@@ -12,6 +12,8 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from mcp.types import CreateMessageRequestParams, CreateMessageResult, TextContent
 
+from open_storyline.mcp.hooks.chat_middleware import record_llm_token_usage_from_response
+
 # -----------------------------
 # Configurable parameters: Control multimodal input size
 # -----------------------------
@@ -412,6 +414,11 @@ def make_sampling_callback(
                     resp = await asyncio.to_thread(bound2.invoke, lc_messages)
 
             text_out = _extract_text_from_lc_response(resp)
+            record_llm_token_usage_from_response(
+                resp,
+                model=str(model_name),
+                node_id=str(metadata.get("node_id") or ""),
+            )
             return CreateMessageResult(
                 content=TextContent(type="text", text=text_out),
                 model=str(model_name),

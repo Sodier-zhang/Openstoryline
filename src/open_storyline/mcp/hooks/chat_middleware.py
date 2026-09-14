@@ -31,11 +31,103 @@ _SENSITIVE_KEYS = {
 # GUI 日志输出通道
 _MCP_LOG_SINK = contextvars.ContextVar("mcp_log_sink", default=None)
 _MCP_ACTIVE_TOOL_CALL_ID = contextvars.ContextVar("mcp_active_tool_call_id", default=None)
+_LLM_TOKEN_USAGE_RECORDER = contextvars.ContextVar("llm_token_usage_recorder", default=None)
 def set_mcp_log_sink(sink: Optional[Callable[[dict], None]]):
     return _MCP_LOG_SINK.set(sink)
 
 def reset_mcp_log_sink(token):
     _MCP_LOG_SINK.reset(token)
+
+def set_llm_token_usage_recorder(recorder: Optional[Callable[[dict], None]]):
+    return _LLM_TOKEN_USAGE_RECORDER.set(recorder)
+
+def reset_llm_token_usage_recorder(token):
+    _LLM_TOKEN_USAGE_RECORDER.reset(token)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _token_usage_from_obj(obj: Any) -> tuple[int | None, int | None, int | None]:
+    usage = getattr(obj, "usage_metadata", None)
+    if isinstance(usage, dict):
+        input_tokens = _int_or_none(
+            usage.get("input_tokens")
+            or usage.get("prompt_tokens")
+            or usage.get("input_token_count")
+        )
+        output_tokens = _int_or_none(
+            usage.get("output_tokens")
+            or usage.get("completion_tokens")
+            or usage.get("output_token_count")
+        )
+        total_tokens = _int_or_none(usage.get("total_tokens") or usage.get("total_token_count"))
+        if input_tokens is not None or output_tokens is not None or total_tokens is not None:
+            return input_tokens, output_tokens, total_tokens
+
+    metadata = getattr(obj, "response_metadata", None)
+    if isinstance(metadata, dict):
+        token_usage = metadata.get("token_usage") or metadata.get("usage") or metadata
+        if isinstance(token_usage, dict):
+            input_tokens = _int_or_none(
+                token_usage.get("input_tokens")
+                or token_usage.get("prompt_tokens")
+                or token_usage.get("input_token_count")
+            )
+            output_tokens = _int_or_none(
+                token_usage.get("output_tokens")
+                or token_usage.get("completion_tokens")
+                or token_usage.get("output_token_count")
+            )
+            total_tokens = _int_or_none(
+                token_usage.get("total_tokens")
+                or token_usage.get("total_token_count")
+            )
+            if input_tokens is not None or output_tokens is not None or total_tokens is not None:
+                return input_tokens, output_tokens, total_tokens
+
+    additional_kwargs = getattr(obj, "additional_kwargs", None)
+    if isinstance(additional_kwargs, dict):
+        token_usage = additional_kwargs.get("token_usage") or additional_kwargs.get("usage")
+        if isinstance(token_usage, dict):
+            input_tokens = _int_or_none(token_usage.get("input_tokens") or token_usage.get("prompt_tokens"))
+            output_tokens = _int_or_none(token_usage.get("output_tokens") or token_usage.get("completion_tokens"))
+            total_tokens = _int_or_none(token_usage.get("total_tokens"))
+            if input_tokens is not None or output_tokens is not None or total_tokens is not None:
+                return input_tokens, output_tokens, total_tokens
+
+    return None, None, None
+
+
+def record_llm_token_usage_from_response(
+    response: Any,
+    *,
+    model: str,
+    node_id: str = "",
+) -> None:
+    recorder = _LLM_TOKEN_USAGE_RECORDER.get()
+    if recorder is None:
+        return
+
+    input_tokens, output_tokens, total_tokens = _token_usage_from_obj(response)
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = int(input_tokens or 0) + int(output_tokens or 0)
+
+    recorder({
+        "model": str(model or ""),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "node_id": str(node_id or ""),
+    })
 
 
 def _norm_url(u: str) -> str:
